@@ -35,8 +35,8 @@ def test_live_with_approval_mode_drafts_order_without_executing(tmp_path: Path) 
 
 def test_owner_approval_routes_through_risk_gate_to_broker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verify that owner approval with valid token safely executes through the Risk Gate."""
-    secret = "test_live_owner_token_safe_99"
-    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
+    mock_token = "test_live_owner_token_safe_99"  # gitleaks:allow
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", mock_token)
     server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL", db=Database(db_path=tmp_path / "test.db"))
     server.seed_mock_data()
 
@@ -62,7 +62,7 @@ def test_owner_approval_routes_through_risk_gate_to_broker(monkeypatch: pytest.M
     # 2. Accept execution with valid owner signature
     valid_res = server.approve_and_place_order(
         proposal_id=proposal_id,
-        approval_token=secret
+        approval_token=mock_token
     )
     assert valid_res["passed"] is True
     assert valid_res["order"]["status"] in ("FILLED", "SUBMITTED")
@@ -70,8 +70,8 @@ def test_owner_approval_routes_through_risk_gate_to_broker(monkeypatch: pytest.M
 
 def test_slippage_monitoring_within_assumptions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verify slippage monitoring compares execution fill against expected mark price."""
-    secret = "test_live_owner_token_safe_99"
-    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
+    mock_token = "test_live_owner_token_safe_99"  # gitleaks:allow
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", mock_token)
     server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL", db=Database(db_path=tmp_path / "test.db"))
     server.seed_mock_data()
 
@@ -90,7 +90,7 @@ def test_slippage_monitoring_within_assumptions(monkeypatch: pytest.MonkeyPatch,
 
     res = server.approve_and_place_order(
         proposal_id=proposal_id,
-        approval_token=secret
+        approval_token=mock_token
     )
     assert res["passed"] is True
     # Verify slippage calculation is tracked

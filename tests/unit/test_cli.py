@@ -24,7 +24,7 @@ def test_cli_run_cycle(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFi
 
 
 def test_cli_kill_switch(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
-    test_secret = "test_cli_secret_key_123"
+    test_secret = "mock_cli_token_123"  # gitleaks:allow
     monkeypatch.setenv("AEGIS_OWNER_SECRET", test_secret)
     test_lock = tmp_path / "test_kill.lock"
     # Engage

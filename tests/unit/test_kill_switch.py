@@ -28,16 +28,16 @@ def test_kill_switch_engagement_and_persistence(temp_kill_file: Path) -> None:
 
 def test_kill_switch_disengagement_by_owner(temp_kill_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify that only authorized owner disengagement with valid token can clear the kill switch."""
-    secret = "owner_secret_key_789"
-    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
+    mock_token = "mock_auth_token_789"  # gitleaks:allow
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", mock_token)
     ks = StandaloneKillSwitch(lock_file_path=temp_kill_file)
     ks.engage(reason="Test", operator="Abdul Hayy")
     assert ks.is_engaged() is True
 
     # Agent cannot clear it; only authorized operator
     with pytest.raises(PermissionError, match="Unauthorized"):
-        ks.disengage(operator="AI_AGENT", token=secret)
+        ks.disengage(operator="AI_AGENT", token=mock_token)
 
     # Authorized owner disengages with valid token
-    ks.disengage(operator="Abdul Hayy", token=secret)
+    ks.disengage(operator="Abdul Hayy", token=mock_token)
     assert ks.is_engaged() is False

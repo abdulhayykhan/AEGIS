@@ -30,8 +30,8 @@ def test_telegram_status_command() -> None:
 
 
 def test_telegram_emergency_kill_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    secret = "tg_test_secret_123"
-    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
+    mock_token = "mock_tg_token_123"  # gitleaks:allow
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", mock_token)
     server = AegisConnectorServer(mode="PAPER")
     lock_file = tmp_path / "tg_kill.lock"
     ks = StandaloneKillSwitch(lock_file_path=lock_file)
@@ -42,13 +42,13 @@ def test_telegram_emergency_kill_command(tmp_path: Path, monkeypatch: pytest.Mon
     assert handler.kill_switch.is_engaged() is True
 
     # Cleanup kill switch
-    handler.kill_switch.disengage(operator="Abdul Hayy Khan", token=secret)
+    handler.kill_switch.disengage(operator="Abdul Hayy Khan", token=mock_token)
     assert handler.kill_switch.is_engaged() is False
 
 
 def test_telegram_approve_proposal_command(monkeypatch: pytest.MonkeyPatch) -> None:
-    secret = "tg_owner_secret_456"
-    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
+    mock_token = "mock_tg_token_456"  # gitleaks:allow
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", mock_token)
     server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL")
     server.seed_mock_data()
     handler = TelegramCommandHandler(server=server, authorized_chat_id="12345678")

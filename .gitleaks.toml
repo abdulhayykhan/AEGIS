@@ -1,0 +1,11 @@
+title = "AEGIS Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allow mock test tokens and example configurations"
+paths = [
+    '''tests/.*''',
+    '''\.env\.example$''',
+]

@@ -193,7 +193,7 @@ def test_proof_5_approval_forgery_fails_closed(tmp_path: Path, monkeypatch: pyte
     assert any("not configured" in r or "invalid" in r.lower() for r in res_forgery["reasons"])
 
     # 2. Configure secret and sign canonically
-    secret = "aegis_super_secure_vault_secret_2026"
+    secret = "aegis_mock_owner_vault_2026"  # gitleaks:allow
     monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
 
     # Wrong secret token -> Reject
