@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from src.connector.broker import PaperBroker, Position
+from src.connector.broker import BaseBroker, PaperBroker, Position
 from src.gate.evaluator import GateConfig, RiskGate
 from src.gate.kill_switch import StandaloneKillSwitch
 from src.gate.models import GateContext, OrderProposal, OrderSide, OrderType
@@ -38,11 +38,12 @@ class AegisConnectorServer:
         self,
         mode: str = "PAPER",
         gate_config: GateConfig | None = None,
-        db: Database | None = None
+        db: Database | None = None,
+        broker: BaseBroker | None = None
     ) -> None:
         self.mode = mode
         self.db = db or Database()
-        self.broker = PaperBroker(initial_cash=Decimal("10000.00"))
+        self.broker = broker or PaperBroker(initial_cash=Decimal("10000.00"))
         self.gate = RiskGate(config=gate_config or GateConfig())
         
         # Restore open positions from persistent storage

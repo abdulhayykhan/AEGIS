@@ -2,9 +2,9 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
-from src.signals.indicators import calculate_atr, calculate_sma, compute_trend_signal
 from src.signals.models import Bar, SignalType
 from src.signals.sizing import calculate_position_size
+from src.signals.strategy import StrategyConfig, evaluate_strategy
 
 
 class BacktestConfig(BaseModel):
@@ -104,11 +104,6 @@ class BacktestEngine:
                 )
             )
 
-            closes = [b.close for b in visible_bars]
-            sma_fast = calculate_sma(closes, period=fast_period)
-            sma_slow = calculate_sma(closes, period=slow_period)
-            atr = calculate_atr(visible_bars, period=atr_period)
-
             current_price = current_bar.close
 
             # Check stop loss if holding position (accounting for gap-throughs)
@@ -137,14 +132,21 @@ class BacktestEngine:
                 )
                 position_units = Decimal("0.0")
 
-            # Evaluate trend signals
+            # Evaluate unified strategy logic
             has_pos = position_units > Decimal(0)
-            signal = compute_trend_signal(
-                current_close=current_price,
-                sma_50=sma_fast,
-                sma_200=sma_slow,
-                has_position=has_pos
+            strat_res = evaluate_strategy(
+                visible_bars,
+                has_position=has_pos,
+                config=StrategyConfig(
+                    fast_period=fast_period,
+                    slow_period=slow_period,
+                    atr_period=atr_period,
+                    min_warmup_bars=slow_period,
+                    regime_filter_enabled=False  # Keep raw backtest baseline comparable
+                )
             )
+            signal = strat_res.signal
+            atr = strat_res.atr
 
             # Update signal in decision history
             decision_history[-1] = DecisionRecord(
