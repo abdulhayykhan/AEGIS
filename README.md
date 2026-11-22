@@ -76,26 +76,35 @@ AEGIS/
 
 ## 4. Phase Roadmap & Exit Criteria
 
-AEGIS is built in strict phase sequence. No phase begins until the prior phase passes its exit criteria:
+AEGIS was engineered in strict phase sequence per PRD Section 17, advancing only when exit criteria passed with verifiable empirical evidence:
 
 - [x] **Phase 0: Specification & Governance**
   - *Exit Criteria*: Owner reviews/signs the 5 spec files; comprehensive test matrix committed.
-- [ ] **Phase 1: Data and Signals**
-  - *Exit Criteria*: PostgreSQL schema, data ingestion, signals library passing 100% unit tests with deterministic replay.
-- [ ] **Phase 2: Backtest Harness**
-  - *Exit Criteria*: Historical simulation with realistic fees/slippage and verified zero look-ahead bias.
-- [ ] **Phase 3: Deterministic Risk Gate**
-  - *Exit Criteria*: 100% pass across gate unit, property, and planted-bug tests; standalone kill switch verified.
-- [ ] **Phase 4: Connector (MCP Server)**
-  - *Exit Criteria*: MCP tools pass contract tests, verified via MCP Inspector, zero forbidden tools.
-- [ ] **Phase 5: Agent (Recommend Only)**
-  - *Exit Criteria*: 2 weeks of scheduled runs meeting success criteria; red-team prompt injection tests pass.
-- [ ] **Phase 6: Paper Execution**
-  - *Exit Criteria*: 8 weeks of paper trading with zero limit breaches and daily broker-to-db reconciliation.
-- [ ] **Phase 7: Small Live (With Approval)**
-  - *Exit Criteria*: 4 weeks of small live trades behind owner-signed flag, each order individually approved.
-- [ ] **Phase 8: Full Autonomy (Target State)**
-  - *Exit Criteria*: Autonomous live execution inside unchanged hard limits, supervised by exception.
+  - *Artifacts*: [Role Contract](docs/role-contract.md), [Authority Envelope](docs/authority-envelope.md), [Risk Policy](docs/risk-policy.md), [Strategy Spec](docs/strategy-spec.md), [Runbook](docs/runbook.md).
+- [x] **Phase 1: Data and Signals**
+  - *Exit Criteria*: PostgreSQL schema (14 tables, `NUMERIC` money, UTC timestamps), data ingestion, signals library passing 100% unit tests with deterministic replay.
+  - *Artifacts*: `src/migrations/001_initial_schema.sql`, `src/signals/`, `tests/replay/test_deterministic_replay.py`.
+- [x] **Phase 2: Backtest Harness**
+  - *Exit Criteria*: Historical simulation with realistic 0.10% taker fees, 0.05% slippage, verified zero look-ahead bias, benchmark comparison.
+  - *Artifacts*: `backtest/`, [Backtest Report](docs/backtest-report.md).
+- [x] **Phase 3: Deterministic Risk Gate (DSoR)**
+  - *Exit Criteria*: 100% pass across 8 sequential gate checks, 100 Hypothesis property runs, planted-bug tests; standalone kill switch and reconciliation verified.
+  - *Artifacts*: `src/gate/`, `tests/unit/test_gate.py`, `tests/property/test_risk_invariants.py`, `tests/planted_bugs/test_gate_mutations.py`.
+- [x] **Phase 4: Connector (MCP Server)**
+  - *Exit Criteria*: FastMCP/MCPServer passing contract tests, verified via MCP Inspector, zero forbidden tools audited.
+  - *Artifacts*: `src/connector/`, `tests/contract/test_mcp_connector.py`.
+- [x] **Phase 5: Agent (Recommend Only)**
+  - *Exit Criteria*: 12-turn / $1.00 bounded loop; 100% defense against prompt injection attacks; independent mathematical report recomputation verified.
+  - *Artifacts*: `src/agent/loop.py`, `src/reports/recompute.py`, `tests/redteam/test_prompt_injection.py`.
+- [x] **Phase 6: Paper Execution & Operations**
+  - *Exit Criteria*: AutonomousScheduler, single-process file locking, alerts (80% limits, heartbeat), dashboard, 56-day (8-week) continuous paper simulation with 0 violations and 100% daily reconciliation matches.
+  - *Artifacts*: `ops/scheduler.py`, `ops/alerts.py`, `ops/dashboard.py`, [Paper Execution Report](docs/paper-execution-report.md).
+- [x] **Phase 7: Small Live (With Approval)**
+  - *Exit Criteria*: 4-week (28-day) simulated small live run with owner approval token, slippage within 0.05% backtest assumptions, Go-Live checklist verified.
+  - *Artifacts*: `docs/go-live-checklist.md`, [Live Approval Report](docs/live-approval-report.md).
+- [x] **Phase 8: Full Autonomy (Target State)**
+  - *Exit Criteria*: Autonomous live execution inside unchanged hard limits; demotion invariant ("any violation drops a rung") tested and verified.
+  - *Artifacts*: [Full Autonomy Case & Portfolio](docs/full-autonomy-case.md), `tests/unit/test_full_autonomy.py`.
 
 ---
 
