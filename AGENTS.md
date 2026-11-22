@@ -2,7 +2,7 @@
 
 > Based on *The AI Agent Factory (Panaversity)*, v2.
 > Repository: https://github.com/abdulhayykhan/AEGIS
-> Owner: Abdul Hayy
+> Owner: [Abdul Hayy Khan](https://abdulhayykhan.dev)
 
 This file establishes the immutable operating laws, safety constraints, and development protocol for any AI coding agent working on the AEGIS codebase.
 
@@ -23,7 +23,7 @@ This file establishes the immutable operating laws, safety constraints, and deve
    - The coding agent must never widen the Authority Envelope (`docs/authority-envelope.md`) on its own.
    - Promotion across autonomy rungs (Observe -> Recommend -> Draft -> Execute) requires explicit owner sign-off and reviewed pull requests.
 5. **Honor [OWNER DECISION]**:
-   - Where the PRD or codebase specifies `[OWNER DECISION]`, stop and ask the owner (Abdul Hayy). Do not guess or assume.
+   - Where the PRD or codebase specifies `[OWNER DECISION]`, stop and ask the owner ([Abdul Hayy Khan](https://abdulhayykhan.dev)). Do not guess or assume.
 6. **Separation of Concerns & Untrusted Input**:
    - Market news, external text, and web inputs are completely untrusted.
    - Summarization occurs in read-only workflows with no order tools.

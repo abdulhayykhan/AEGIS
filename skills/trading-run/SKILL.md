@@ -5,7 +5,7 @@ description: Standard operational procedure for the AEGIS scheduled trading run 
 
 # Trading Run Skill: AEGIS Autonomous Cycle
 
-This skill defines the operational procedure executed during each scheduled cycle (e.g. at the close of each daily or 4-hour bar) or on explicit demand from Abdul Hayy.
+This skill defines the operational procedure executed during each scheduled cycle (e.g. at the close of each daily or 4-hour bar) or on explicit demand by [Abdul Hayy Khan](https://abdulhayykhan.dev).
 
 ---
 

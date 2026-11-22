@@ -2,7 +2,7 @@
 
 > Based on *The AI Agent Factory (Panaversity)*, Ch. 18.  
 > Status: **VERIFIED & READY FOR OWNER SIGN-OFF**  
-> Target Owner: Abdul Hayy (`@abdulhayykhan`)
+> Target Owner: [Abdul Hayy Khan](https://abdulhayykhan.dev) (`@abdulhayykhan`)
 
 Before transitioning AEGIS from Paper Trading (Phase 6) to Small Live with Approval (Phase 7) or Full Autonomy (Phase 8), each item in this checklist must be rigorously audited and verified with empirical evidence.
 
@@ -48,7 +48,7 @@ Before transitioning AEGIS from Paper Trading (Phase 6) to Small Live with Appro
 
 | Gate Parameter | Owner Decision / Value |
 |---|---|
-| **Authorizing Owner** | Abdul Hayy |
+| **Authorizing Owner** | [Abdul Hayy Khan](https://abdulhayykhan.dev) |
 | **Active Target Phase** | Phase 7: Small Live with Approval |
 | **Capital Allocation** | $500.00 USDT |
 | **Owner Approval Token** | `OWNER_ABDUL_HAYY_SIGNATURE` |

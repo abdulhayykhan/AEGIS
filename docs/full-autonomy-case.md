@@ -1,7 +1,7 @@
 # AEGIS Phase 8 Full Autonomy Promotion Case & Evidence Portfolio
 
 > **Target State**: Full Autonomy (Rung 4: Execute inside limits without per-trade approval)  
-> **Authorizing Owner**: Abdul Hayy (`@abdulhayykhan`)  
+> **Authorizing Owner**: [Abdul Hayy Khan](https://abdulhayykhan.dev) (`@abdulhayykhan`)  
 > **Repository**: https://github.com/abdulhayykhan/AEGIS  
 > **Reference**: *The AI Agent Factory (Panaversity)*, Ch. 7, 17, 18, 21
 
@@ -15,7 +15,7 @@ In Phase 8, AEGIS operates as an autonomous digital FTE:
 - It autonomously ingests market data, computes trend-following signals, formulates schema-validated trade proposals, routes them through the deterministic Risk Gate, and executes approved orders on the exchange.
 - **No human per-trade approval bottleneck** is required for normal operations.
 - **Safety is absolute and deterministic**: The Risk Gate (DSoR) remains strictly outside the LLM reasoning harness. Every mathematical limit, position cap, and risk boundary is deterministically checked.
-- **Demotion Invariant**: Under the rule *"Any violation drops a rung"*, any gate rejection, data staleness, reconciliation discrepancy, or unexpected drawdown immediately disengages full autonomy, drops the active rung back to Recommend-Only, and dispatches an urgent alert to Abdul Hayy.
+- **Demotion Invariant**: Under the rule *"Any violation drops a rung"*, any gate rejection, data staleness, reconciliation discrepancy, or unexpected drawdown immediately disengages full autonomy, drops the active rung back to Recommend-Only, and dispatches an urgent alert to [Abdul Hayy Khan](https://abdulhayykhan.dev).
 
 ---
 
@@ -103,10 +103,10 @@ Across the entire AEGIS codebase:
 
 To activate Phase 8 Full Autonomy on live capital:
 
-1. [ ] **Owner Sign-Off**: Abdul Hayy approves this promotion case.
+1. [ ] **Owner Sign-Off**: [Abdul Hayy Khan](https://abdulhayykhan.dev) approves this promotion case.
 2. [ ] **Update Authority Envelope**: Update `docs/authority-envelope.md` active phase to Phase 8 via reviewed PR.
 3. [ ] **Deploy Autonomous Scheduler**: Configure cron schedule to execute `ops.scheduler` at bar close (every 4 hours or daily).
 4. [ ] **Monitor Exception Channel**: Ensure Telegram alert bot is active and monitored.
 
-**Signature**: `[PENDING OWNER SIGNATURE: Abdul Hayy]`  
+**Signature**: `[PENDING OWNER SIGNATURE: [Abdul Hayy Khan](https://abdulhayykhan.dev)]`  
 **Date**: 2026-11-22

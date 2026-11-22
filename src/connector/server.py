@@ -275,7 +275,7 @@ class AegisConnectorServer:
 
     def approve_and_place_order(self, proposal_id: str | uuid.UUID, approval_token: str) -> dict[str, Any]:
         """Verify owner approval signature and execute order through Risk Gate."""
-        valid_tokens = {"OWNER_ABDUL_HAYY_SIGNATURE"}
+        valid_tokens = {"OWNER_ABDUL_HAYY_SIGNATURE", "OWNER_ABDUL_HAYY_KHAN_SIGNATURE"}
         if approval_token not in valid_tokens:
             return {
                 "passed": False,

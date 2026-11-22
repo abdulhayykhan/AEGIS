@@ -84,7 +84,7 @@ The Kill Switch is an out-of-band safety mechanism designed to protect capital u
   1. Sets atomic kill switch state in PostgreSQL and shared persistent lock file.
   2. Cancels all pending orders across all venues immediately.
   3. Closes existing positions using market orders (if configured for market liquidation).
-  4. Dispatches emergency priority alerts to Abdul Hayy via Telegram.
+  4. Dispatches emergency priority alerts to [Abdul Hayy Khan](https://abdulhayykhan.dev) via Telegram.
   5. Refuses all subsequent requests from the agent loop.
 - **Deactivation**:
   - The AI worker can never clear the kill switch.
@@ -94,6 +94,6 @@ The Kill Switch is an out-of-band safety mechanism designed to protect capital u
 
 ## 4. Owner Sign-off
 
-- **Owner**: Abdul Hayy
-- **Signature**: `[PENDING OWNER SIGNATURE: Abdul Hayy]`
+- **Owner**: [Abdul Hayy Khan](https://abdulhayykhan.dev)
+- **Signature**: `[PENDING OWNER SIGNATURE: [Abdul Hayy Khan](https://abdulhayykhan.dev)]`
 - **Date**: 2026-11-22
