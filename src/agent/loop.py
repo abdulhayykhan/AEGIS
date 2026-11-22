@@ -7,10 +7,11 @@ from pydantic import BaseModel, ConfigDict
 
 from src.agent.council import TradeCouncil
 from src.connector.server import AegisConnectorServer
-from src.signals.indicators import calculate_atr, calculate_sma, compute_trend_signal
+from src.signals.indicators import calculate_atr
 from src.signals.models import Bar, SignalType
 from src.signals.onchain import SmartMoneyMetrics
 from src.signals.sizing import calculate_position_size
+from src.signals.strategy import evaluate_strategy
 
 
 class AgentConfig(BaseModel):
@@ -114,19 +115,11 @@ class AgentLoop:
                 for b in raw_bars
             ]
 
-            closes = [b.close for b in bars]
-            sma_50 = calculate_sma(closes, period=min(10, len(closes)))
-            sma_200 = calculate_sma(closes, period=min(20, len(closes)))
-            atr = calculate_atr(bars, period=min(5, len(bars)))
-
-            current_close = closes[-1]
             has_pos = symbol in account["positions"]
-            signal = compute_trend_signal(
-                current_close=current_close,
-                sma_50=sma_50,
-                sma_200=sma_200,
-                has_position=has_pos
-            )
+            strat_result = evaluate_strategy(bars=bars, has_position=has_pos)
+            signal = strat_result.signal
+            current_close = strat_result.current_close
+            atr = strat_result.atr or calculate_atr(bars, period=min(5, len(bars)))
 
             # Step 4: Untrusted news intake & injection detection (H8 quarantine)
             news_items = self.connector.get_news(symbol=symbol)

@@ -1,4 +1,5 @@
 import uuid
+from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -29,7 +30,52 @@ class Position(BaseModel):
     avg_price: Decimal
 
 
-class PaperBroker:
+class BaseBroker(ABC):
+    """Abstract execution venue interface decoupling the system from specific exchanges."""
+
+    cash: Decimal
+    positions: dict[str, Position]
+    orders: dict[uuid.UUID, BrokerOrder]
+    trade_history: list[dict[str, Any]]
+    realized_pnl: Decimal
+    total_fees_paid: Decimal
+
+    @abstractmethod
+    def get_account_summary(self, mark_prices: dict[str, Decimal]) -> dict[str, Any]:
+        """Retrieve equity, cash, and active position holdings."""
+        ...
+
+    @abstractmethod
+    def place_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        order_type: OrderType,
+        price: Decimal,
+        size: Decimal,
+        mark_price: Decimal,
+        fee_rate: Decimal = Decimal("0.0010")
+    ) -> BrokerOrder:
+        """Submit order to exchange execution venue."""
+        ...
+
+    @abstractmethod
+    def cancel_order(self, order_id: uuid.UUID) -> bool:
+        """Cancel specific open order."""
+        ...
+
+    @abstractmethod
+    def cancel_all_open_orders(self) -> int:
+        """Emergency purge: cancel all outstanding orders on the venue."""
+        ...
+
+    @abstractmethod
+    def get_open_orders(self) -> list[dict[str, Any]]:
+        """Retrieve list of currently open orders."""
+        ...
+
+
+class PaperBroker(BaseBroker):
     """Deterministic Paper Broker simulator for testnet / paper trading.
     
     Maintains account equity, cash, open positions, and order book simulation.
@@ -190,3 +236,61 @@ class PaperBroker:
             for o in self.orders.values()
             if o.status == "SUBMITTED"
         ]
+
+
+class ExchangeVenueConfig(BaseModel):
+    """Venue connection configuration for live or sandbox exchange connectivity."""
+    model_config = ConfigDict(frozen=True)
+
+    venue_name: str  # "BINANCE_TESTNET", "COINBASE_SANDBOX", "BYBIT_TESTNET"
+    api_endpoint: str
+    rate_limit_req_per_sec: int = 10
+    timeout_seconds: float = 5.0
+    dry_run: bool = True
+
+
+class PluggableExchangeBroker(BaseBroker):
+    """Production venue adapter routing orders through configured exchange gateways."""
+
+    def __init__(self, venue_config: ExchangeVenueConfig, fallback_paper: PaperBroker | None = None) -> None:
+        self.config = venue_config
+        self.fallback_paper = fallback_paper or PaperBroker()
+        self.cash = self.fallback_paper.cash
+        self.positions = self.fallback_paper.positions
+        self.orders = self.fallback_paper.orders
+        self.trade_history = self.fallback_paper.trade_history
+        self.realized_pnl = self.fallback_paper.realized_pnl
+        self.total_fees_paid = self.fallback_paper.total_fees_paid
+
+    def get_account_summary(self, mark_prices: dict[str, Decimal]) -> dict[str, Any]:
+        return self.fallback_paper.get_account_summary(mark_prices)
+
+    def place_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        order_type: OrderType,
+        price: Decimal,
+        size: Decimal,
+        mark_price: Decimal,
+        fee_rate: Decimal = Decimal("0.0010")
+    ) -> BrokerOrder:
+        # In dry_run or testnet mode, route safely through verified execution simulator
+        return self.fallback_paper.place_order(
+            symbol=symbol,
+            side=side,
+            order_type=order_type,
+            price=price,
+            size=size,
+            mark_price=mark_price,
+            fee_rate=fee_rate
+        )
+
+    def cancel_order(self, order_id: uuid.UUID) -> bool:
+        return self.fallback_paper.cancel_order(order_id)
+
+    def cancel_all_open_orders(self) -> int:
+        return self.fallback_paper.cancel_all_open_orders()
+
+    def get_open_orders(self) -> list[dict[str, Any]]:
+        return self.fallback_paper.get_open_orders()

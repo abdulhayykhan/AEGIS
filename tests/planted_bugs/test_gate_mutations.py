@@ -203,3 +203,92 @@ def test_planted_bug_catches_ignored_reconciliation_mismatch() -> None:
 
     buggy_gate = MutatedRiskGate_NoReconciliationCheck()
     assert buggy_gate.evaluate(proposal, context).passed is True
+
+
+class MutatedRiskGate_NoIdempotencyCheck(RiskGate):
+    """Planted Bug: Ignored idempotency check."""
+    def _check_idempotency(self, proposal: OrderProposal, context: GateContext) -> list[str]:
+        return []
+
+
+def test_planted_bug_catches_disabled_idempotency_check() -> None:
+    now = datetime(2026, 11, 22, 12, 0, 0, tzinfo=UTC)
+    idem_key = uuid.uuid4()
+    context = GateContext(
+        account_equity=Decimal("10000.00"),
+        peak_equity=Decimal("10000.00"),
+        daily_realized_loss=Decimal("0.00"),
+        open_positions={},
+        open_position_notionals={},
+        orders_today_count=0,
+        allowed_instruments={"BTC/USDT"},
+        last_price=Decimal("30000.00"),
+        last_bar_ts=now - timedelta(minutes=5),
+        current_ts=now,
+        bar_interval=timedelta(hours=4),
+        kill_switch_active=False,
+        used_idempotency_keys={idem_key},  # Already used!
+        mode="PAPER"
+    )
+    proposal = OrderProposal(
+        proposal_id=uuid.uuid4(),
+        idempotency_key=idem_key,
+        symbol="BTC/USDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=Decimal("30000.00"),
+        size=Decimal("0.01"),
+        stop_loss=Decimal("29000.00"),
+        rationale_id="TEST_IDEM"
+    )
+
+    authentic_gate = RiskGate()
+    assert authentic_gate.evaluate(proposal, context).passed is False
+
+    buggy_gate = MutatedRiskGate_NoIdempotencyCheck()
+    assert buggy_gate.evaluate(proposal, context).passed is True
+
+
+class MutatedRiskGate_NoApprovalCheck(RiskGate):
+    """Planted Bug: Ignored owner approval check in LIVE_WITH_APPROVAL."""
+    def _check_approvals(self, proposal: OrderProposal, context: GateContext) -> list[str]:
+        return []
+
+
+def test_planted_bug_catches_bypassed_live_approval() -> None:
+    now = datetime(2026, 11, 22, 12, 0, 0, tzinfo=UTC)
+    context = GateContext(
+        account_equity=Decimal("10000.00"),
+        peak_equity=Decimal("10000.00"),
+        daily_realized_loss=Decimal("0.00"),
+        open_positions={},
+        open_position_notionals={},
+        orders_today_count=0,
+        allowed_instruments={"BTC/USDT"},
+        last_price=Decimal("30000.00"),
+        last_bar_ts=now - timedelta(minutes=5),
+        current_ts=now,
+        bar_interval=timedelta(hours=4),
+        kill_switch_active=False,
+        used_idempotency_keys=set(),
+        mode="LIVE_WITH_APPROVAL",
+        approval_token=None  # Missing owner signature!
+    )
+    proposal = OrderProposal(
+        proposal_id=uuid.uuid4(),
+        idempotency_key=uuid.uuid4(),
+        symbol="BTC/USDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=Decimal("30000.00"),
+        size=Decimal("0.01"),
+        stop_loss=Decimal("29000.00"),
+        rationale_id="TEST_NO_SIG"
+    )
+
+    authentic_gate = RiskGate()
+    assert authentic_gate.evaluate(proposal, context).passed is False
+
+    buggy_gate = MutatedRiskGate_NoApprovalCheck()
+    assert buggy_gate.evaluate(proposal, context).passed is True
+

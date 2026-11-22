@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import uuid
@@ -29,6 +30,7 @@ class Database:
         """Clear all records from dynamic tables (useful for test isolation and resets)."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            cursor.execute("DELETE FROM event_ledger")
             cursor.execute("DELETE FROM demotions")
             cursor.execute("DELETE FROM equity_snapshots")
             cursor.execute("DELETE FROM positions")
@@ -60,11 +62,12 @@ class Database:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS runs (
                     run_id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL DEFAULT 'PAPER',
                     started_at TEXT NOT NULL,
                     completed_at TEXT,
                     status TEXT NOT NULL,
-                    turns_executed INTEGER NOT NULL,
-                    cost_usd TEXT NOT NULL,
+                    turns_executed INTEGER NOT NULL DEFAULT 1,
+                    cost_usd TEXT NOT NULL DEFAULT '0.00',
                     stop_reason TEXT,
                     summary TEXT
                 )
@@ -163,11 +166,110 @@ class Database:
                 )
             """)
 
+            # Append-only Event Ledger (PRD Section 6 & Review Section 6)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS event_ledger (
+                    event_id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    aggregate_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
             # Seed migration record
             cursor.execute("""
                 INSERT OR IGNORE INTO schema_migrations (version, applied_at, description)
                 VALUES (1, ?, 'Initial AEGIS persistent schema with migration tracking')
             """, (datetime.now(UTC).isoformat(),))
+            conn.commit()
+
+    # --- Append-only Event Ledger operations ---
+    def record_event(self, event_type: str, aggregate_id: str, payload: dict[str, Any]) -> str:
+        """Record an immutable event into the audit event ledger."""
+        event_id = str(uuid.uuid4())
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO event_ledger (event_id, event_type, aggregate_id, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                event_id,
+                event_type,
+                aggregate_id,
+                json.dumps(payload, default=str),
+                datetime.now(UTC).isoformat()
+            ))
+            conn.commit()
+        return event_id
+
+    def get_events(self, event_type: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if event_type:
+                cursor.execute("""
+                    SELECT event_id, event_type, aggregate_id, payload_json, created_at
+                    FROM event_ledger WHERE event_type = ? ORDER BY created_at ASC LIMIT ?
+                """, (event_type, limit))
+            else:
+                cursor.execute("""
+                    SELECT event_id, event_type, aggregate_id, payload_json, created_at
+                    FROM event_ledger ORDER BY created_at ASC LIMIT ?
+                """, (limit,))
+            rows = cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    def replay_events(self, aggregate_id: str | None = None) -> list[dict[str, Any]]:
+        """Replay events from beginning of stream to reconstruct deterministic state."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if aggregate_id:
+                cursor.execute("""
+                    SELECT event_id, event_type, aggregate_id, payload_json, created_at
+                    FROM event_ledger WHERE aggregate_id = ? ORDER BY created_at ASC
+                """, (aggregate_id,))
+            else:
+                cursor.execute("""
+                    SELECT event_id, event_type, aggregate_id, payload_json, created_at
+                    FROM event_ledger ORDER BY created_at ASC
+                """)
+            rows = cursor.fetchall()
+            return [dict(r) for r in rows]
+
+    # --- Run tracking operations ---
+    def record_run_start(self, run_id: str, mode: str = "PAPER") -> None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO runs (run_id, mode, started_at, status, turns_executed, cost_usd)
+                VALUES (?, ?, ?, 'RUNNING', 0, '0.00')
+            """, (run_id, mode, datetime.now(UTC).isoformat()))
+            conn.commit()
+
+    def record_run_complete(
+        self,
+        run_id: str,
+        status: str = "SUCCESS",
+        turns_executed: int = 1,
+        cost_usd: Decimal = Decimal("0.01"),
+        stop_reason: str = "NORMAL_COMPLETION",
+        summary: str = ""
+    ) -> None:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE runs
+                SET completed_at = ?, status = ?, turns_executed = ?, cost_usd = ?, stop_reason = ?, summary = ?
+                WHERE run_id = ?
+            """, (
+                datetime.now(UTC).isoformat(),
+                status,
+                turns_executed,
+                str(cost_usd),
+                stop_reason,
+                summary,
+                run_id
+            ))
             conn.commit()
 
     # --- Proposal operations ---

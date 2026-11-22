@@ -49,3 +49,20 @@ def test_cli_reconcile(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFi
     captured = capsys.readouterr()
     assert "RECONCILIATION RESULT" in captured.out
     assert "MATCH" in captured.out
+
+
+def test_cli_promote(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(sys, "argv", ["aegis", "promote", "--target", "PAPER_EXECUTION"])
+    # Without runs, promotion returns 1 (refused) safely
+    exit_code = main()
+    assert exit_code in (0, 1)
+    captured = capsys.readouterr()
+    assert "AUTONOMY PROMOTION CHECK" in captured.out
+
+
+def test_cli_report(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    monkeypatch.setattr(sys, "argv", ["aegis", "report"])
+    exit_code = main()
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "Weekly Performance Report" in captured.out

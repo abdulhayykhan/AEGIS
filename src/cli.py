@@ -38,6 +38,18 @@ def build_parser() -> argparse.ArgumentParser:
     # 4. Reconcile
     subparsers.add_parser("reconcile", help="Verify minor-unit reconciliation between DB and broker")
 
+    # 5. Check Promotion Eligibility
+    promote_parser = subparsers.add_parser("promote", help="Check database evidence against autonomy promotion exit criteria")
+    promote_parser.add_argument(
+        "--target",
+        choices=["PAPER_EXECUTION", "LIVE_WITH_APPROVAL", "FULL_AUTONOMY"],
+        default="PAPER_EXECUTION",
+        help="Target autonomy rung"
+    )
+
+    # 6. Weekly Performance Report
+    subparsers.add_parser("report", help="Generate weekly performance and audit report from database")
+
     return parser
 
 
@@ -93,6 +105,27 @@ def main() -> int:
             for d in res.diffs:
                 print(f"- {d}")
         return 0 if res.match else 1
+
+    elif args.subcommand == "promote":
+        from ops.check_promotion_criteria import check_promotion_eligibility
+        promo_res = check_promotion_eligibility(db=server.db, target_rung=args.target)
+        print(f"--- AUTONOMY PROMOTION CHECK: {args.target} ---")
+        print(f"Eligible: {'YES (APPROVED)' if promo_res.eligible else 'NO (REFUSED)'}")
+        if promo_res.passed_checks:
+            print("Passed Requirements:")
+            for p in promo_res.passed_checks:
+                print(f"  [PASS] {p}")
+        if promo_res.failing_reasons:
+            print("Unmet Requirements:")
+            for f in promo_res.failing_reasons:
+                print(f"  [FAIL] {f}")
+        return 0 if promo_res.eligible else 1
+
+    elif args.subcommand == "report":
+        from ops.weekly_report import generate_weekly_report
+        rep = generate_weekly_report(db=server.db)
+        print(rep.to_markdown())
+        return 0
 
     return 0
 
