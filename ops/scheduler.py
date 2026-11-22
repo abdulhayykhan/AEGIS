@@ -238,7 +238,7 @@ class AutonomousScheduler:
                     reasons=demotion_reasons
                 )
 
-            # Heartbeat alert
+            # Heartbeat alert & Dead-Man's Switch ping (PRD 15.3 & Finding H7)
             acc = self.connector.get_account()
             self.alert_service.notify_heartbeat(
                 equity=Decimal(str(acc["equity"])),
@@ -246,6 +246,10 @@ class AutonomousScheduler:
                 open_positions_count=len(acc["positions"]),
                 status="HEALTHY" if all_passed else "DEGRADED"
             )
+            if all_passed:
+                self.alert_service.ping_external_heartbeat(status="success")
+            else:
+                self.alert_service.ping_external_heartbeat(status="fail", message="; ".join(errors))
 
             summary = (
                 f"Scheduled cycle {'SUCCEEDED' if all_passed else 'FAILED'}. "

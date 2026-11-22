@@ -184,6 +184,13 @@ class Database:
             """, (datetime.now(UTC).isoformat(),))
             conn.commit()
 
+    def get_applied_migrations(self) -> list[dict[str, Any]]:
+        """Return list of all applied schema migrations."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT version, applied_at, description FROM schema_migrations ORDER BY version ASC")
+            return [dict(row) for row in cursor.fetchall()]
+
     # --- Append-only Event Ledger operations ---
     def record_event(self, event_type: str, aggregate_id: str, payload: dict[str, Any]) -> str:
         """Record an immutable event into the audit event ledger."""
