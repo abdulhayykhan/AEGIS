@@ -96,18 +96,18 @@ AEGIS was engineered in strict phase sequence per PRD Section 17, advancing only
 - [x] **Phase 5: Agent (Recommend Only)**
   - *Exit Criteria*: 12-turn / $1.00 bounded loop; 100% defense against prompt injection attacks; independent mathematical report recomputation verified.
   - *Artifacts*: `src/agent/loop.py`, `src/reports/recompute.py`, `tests/redteam/test_prompt_injection.py`.
-- [x] **Phase 6: Paper Execution & Operations**
-  - *Exit Criteria*: AutonomousScheduler, single-process file locking, alerts (80% limits, heartbeat), dashboard, 56-day (8-week) continuous paper simulation with 0 violations and 100% daily reconciliation matches.
+- [x] **Phase 6: Paper Execution & Operations (Harness Validated)**
+  - *Exit Criteria*: AutonomousScheduler, single-process file locking with stale-lock recovery, alerts (80% limits, heartbeat, dead-man's switch), dashboard, 56-day lifecycle simulation harness passed with 0 violations and 100% daily reconciliation matches. Real calendar run to be earned on live testnet.
   - *Artifacts*: `ops/scheduler.py`, `ops/alerts.py`, `ops/dashboard.py`, [Paper Execution Report](docs/paper-execution-report.md).
-- [x] **Phase 7: Small Live (With Approval)**
-  - *Exit Criteria*: 4-week (28-day) simulated small live run with owner approval token, slippage within 0.05% backtest assumptions, Go-Live checklist verified.
+- [x] **Phase 7: Small Live with Approval (Harness Validated)**
+  - *Exit Criteria*: 4-week (28-day) simulated small live run with HMAC owner approval verification, slippage tracking, Go-Live checklist verified. Real capital deployment to be earned on venue.
   - *Artifacts*: `docs/go-live-checklist.md`, [Live Approval Report](docs/live-approval-report.md).
-- [x] **Phase 8: Full Autonomy (Target State)**
-  - *Exit Criteria*: Autonomous live execution inside unchanged hard limits; demotion invariant ("any violation drops a rung") tested and verified.
+- [x] **Phase 8: Full Autonomy (Governance Ready)**
+  - *Exit Criteria*: Autonomous live execution inside unchanged hard limits; persistent demotion invariant ("any violation drops a rung") tested and verified.
   - *Artifacts*: [Full Autonomy Case & Portfolio](docs/full-autonomy-case.md), `tests/unit/test_full_autonomy.py`.
-- [x] **Phase 9: Production Deployment & Operations**
-  - *Exit Criteria*: Unified CLI (`aegis`), production Dockerization (`Dockerfile`, `docker-compose.yml`), `.env.example`, automated cron runner (`ops/cron.sh`).
-  - *Artifacts*: `src/cli.py`, `Dockerfile`, `docker-compose.yml`, `ops/cron.sh`, `.env.example`.
+- [x] **Phase 9: Production Hardening & Code Review Remediation**
+  - *Exit Criteria*: Unified CLI (`aegis`), SQLite/Postgres persistence, real reconciliation from ledger, kill-switch order blocking, oversell prevention, `.dockerignore`, dependency pinning.
+  - *Artifacts*: `src/cli.py`, `src/storage/db.py`, `Dockerfile`, `docker-compose.yml`, `ops/cron.sh`, `.env.example`.
 
 ---
 

@@ -1,4 +1,7 @@
-from datetime import UTC, datetime
+import json
+import os
+import urllib.request
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 
@@ -45,10 +48,43 @@ class AlertService:
 
     def _dispatch(self, msg: AlertMessage) -> None:
         """Dispatch message to external channels (e.g. Telegram) if configured."""
-        if not self.telegram_token or not self.chat_id:
+        token = self.telegram_token or os.environ.get("AEGIS_TELEGRAM_BOT_TOKEN")
+        chat_id = self.chat_id or os.environ.get("AEGIS_TELEGRAM_CHAT_ID")
+        if not token or not chat_id:
             return
-        # In live setup, calls Telegram Bot API send_message.
-        # Safe no-op / mock fallback if unconfigured.
+        try:
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = json.dumps({
+                "chat_id": chat_id,
+                "text": f"[{msg.level.value}] {msg.text}"
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(req, timeout=5)
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+            pass
+
+    def check_dead_mans_switch(
+        self,
+        last_heartbeat: datetime,
+        max_interval: timedelta = timedelta(hours=6)
+    ) -> bool:
+        """Verify that heartbeat was received within the maximum allowed window (PRD 15.3).
+        
+        Returns False and triggers a critical supervisor alert if overdue.
+        """
+        elapsed = datetime.now(UTC) - last_heartbeat
+        if elapsed > max_interval:
+            self._record(
+                AlertLevel.CRITICAL,
+                f"[DEAD-MAN'S SWITCH] OVERDUE HEARTBEAT: Last heartbeat was {elapsed.total_seconds() / 3600:.1f}h ago "
+                f"(threshold: {max_interval.total_seconds() / 3600:.1f}h). Halting automated runs."
+            )
+            return False
+        return True
 
     def notify_limit_approaching(
         self,

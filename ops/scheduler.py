@@ -50,7 +50,15 @@ class AutonomousScheduler:
         """Acquire single-process execution lock file to prevent overlapping runs."""
         try:
             if self.lock_file.exists():
-                return False
+                # Stale lock detection: check if lock file is older than 1 hour (3600 seconds)
+                try:
+                    mtime = self.lock_file.stat().st_mtime
+                    if (datetime.now(UTC).timestamp() - mtime) > 3600:
+                        self.lock_file.unlink()
+                    else:
+                        return False
+                except OSError:
+                    return False
             # Atomic file creation
             self.lock_file.parent.mkdir(parents=True, exist_ok=True)
             flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
@@ -69,7 +77,7 @@ class AutonomousScheduler:
         except OSError:
             pass
 
-    def _get_account_state(self) -> AccountState:
+    def _get_broker_state(self) -> AccountState:
         acc = self.connector.get_account()
         positions: dict[str, PositionState] = {}
         for sym, pos_data in acc["positions"].items():
@@ -83,6 +91,33 @@ class AutonomousScheduler:
             cash=Decimal(str(acc["cash"])),
             positions=positions
         )
+
+    def _get_db_ledger_state(self) -> AccountState:
+        """Reconstruct true account state from immutable fills ledger in database."""
+        initial_cash = getattr(self.connector.broker, "initial_cash", Decimal("10000.00"))
+        ledger = self.connector.db.reconstruct_ledger(initial_cash=initial_cash)
+        mark_prices = self.connector.get_all_mark_prices()
+        positions: dict[str, PositionState] = {}
+        notionals = Decimal("0.00")
+
+        for sym, pos_data in ledger["positions"].items():
+            positions[sym] = PositionState(
+                symbol=sym,
+                size=pos_data["size"],
+                avg_price=pos_data["avg_price"]
+            )
+            notionals += pos_data["size"] * mark_prices.get(sym, pos_data["avg_price"])
+
+        equity = ledger["cash"] + notionals
+        return AccountState(
+            equity=equity,
+            cash=ledger["cash"],
+            positions=positions
+        )
+
+    def _get_account_state(self) -> AccountState:
+        """Backward-compatible helper returning live broker account state."""
+        return self._get_broker_state()
 
     def run_scheduled_cycle(self, current_ts: datetime | None = None) -> ScheduledRunReport:
         """Execute a full autonomous cycle with pre- and post-flight verification."""
@@ -125,17 +160,20 @@ class AutonomousScheduler:
                         errors.append(f"Freshness check failed for {symbol}: {msg}")
             checks["data_freshness_verified"] = freshness_ok
 
-            # 2. Pre-Reconciliation
-            pre_db_state = self._get_account_state()
-            pre_broker_state = self._get_account_state()
+            # 2. Pre-Reconciliation: Compare reconstructed DB fills ledger vs live broker state
+            pre_db_state = self._get_db_ledger_state()
+            pre_broker_state = self._get_broker_state()
             pre_rec = reconcile_states(pre_db_state, pre_broker_state)
             checks["pre_reconciliation_matched"] = pre_rec.match
             if not pre_rec.match:
                 errors.extend(pre_rec.diffs)
                 self.alert_service.notify_reconciliation_mismatch(pre_rec.diffs)
 
-            # 3. Execute Trading Agent Loop
-            agent = AgentLoop(connector=self.connector, config=self.agent_config)
+            # 3. Check persistent demotion state and execute Trading Agent Loop
+            active_rung = self.connector.db.get_active_demotion_rung()
+            active_mode = active_rung or self.agent_config.mode
+            effective_agent_config = self.agent_config if active_mode == self.agent_config.mode else self.agent_config.model_copy(update={"mode": active_mode})
+            agent = AgentLoop(connector=self.connector, config=effective_agent_config)
             cycle_result = agent.execute_cycle()
             checks["cycle_executed"] = cycle_result.status in ("SUCCESS", "STOPPED")
 
@@ -146,9 +184,9 @@ class AutonomousScheduler:
                 gate_audit_ok = len(self.connector.proposals) >= cycle_result.proposals_generated_count
             checks["gate_decisions_recorded"] = gate_audit_ok
 
-            # 5. Post-Reconciliation
-            post_db_state = self._get_account_state()
-            post_broker_state = self._get_account_state()
+            # 5. Post-Reconciliation: Compare updated DB fills ledger vs updated broker state
+            post_db_state = self._get_db_ledger_state()
+            post_broker_state = self._get_broker_state()
             post_rec = reconcile_states(post_db_state, post_broker_state)
             checks["post_reconciliation_matched"] = post_rec.match
             if not post_rec.match:
@@ -168,7 +206,7 @@ class AutonomousScheduler:
                 for t in self.connector.broker.trade_history
             ]
             reported_record = RunReportRecord(
-                reported_realized_pnl=self.connector.broker.realized_pnl,
+                reported_realized_pnl=self.connector.broker.realized_pnl - self.connector.broker.total_fees_paid,
                 reported_total_fees=self.connector.broker.total_fees_paid,
                 reported_trades_count=len(self.connector.broker.trade_history)
             )

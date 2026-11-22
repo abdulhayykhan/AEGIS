@@ -30,6 +30,7 @@ class OrderProposal(BaseModel):
     stop_loss: Decimal = Field(gt=Decimal(0), description="Mandatory stop loss price")
     take_profit: Decimal | None = Field(default=None, description="Optional target exit price")
     rationale_id: str = Field(description="Auditable strategy rationale reference ID")
+    reduce_only: bool = Field(default=False, description="Flag indicating order is an exit/risk-reducing order")
 
 
 class GateContext(BaseModel):
@@ -47,6 +48,11 @@ class GateContext(BaseModel):
     kill_switch_active: bool
     used_idempotency_keys: set[uuid.UUID]
     mode: str = "PAPER"
+    reduce_only: bool = False
+    reconciliation_matched: bool = True
+    approval_token: str | None = None
+    approval_signature: str | None = None
+    proposal_id: uuid.UUID | None = None
 
 
 class GateDecisionResult(BaseModel):

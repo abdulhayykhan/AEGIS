@@ -83,8 +83,8 @@ def main() -> int:
             connector=server,
             scheduler_config=sched_config
         )
-        db_state = scheduler._get_account_state()
-        broker_state = scheduler._get_account_state()
+        db_state = scheduler._get_db_ledger_state()
+        broker_state = scheduler._get_broker_state()
         from src.gate.reconcile import reconcile_states
         res = reconcile_states(db_state, broker_state)
         print("--- RECONCILIATION RESULT ---")

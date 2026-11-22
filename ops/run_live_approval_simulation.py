@@ -76,7 +76,8 @@ def run_live_approval_simulation(
             p_id = uuid.UUID(p["proposal_id"])
             approval_res = server.approve_and_place_order(
                 proposal_id=p_id,
-                approval_token="OWNER_ABDUL_HAYY_SIGNATURE"
+                approval_token="OWNER_ABDUL_HAYY_SIGNATURE",
+                current_ts=current_sim_date
             )
             if approval_res["passed"]:
                 orders_approved_and_placed += 1

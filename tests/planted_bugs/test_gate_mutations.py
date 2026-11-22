@@ -113,3 +113,93 @@ def test_planted_bug_catches_ignored_stale_data(
 
     buggy_gate = MutatedRiskGate_NoFreshnessCheck(config=config)
     assert not any("stale" in r.lower() for r in buggy_gate.evaluate(proposal, context).reasons)
+
+
+class MutatedRiskGate_NoShortingCheck(RiskGate):
+    """Planted Bug: Ignored shorting and oversell check."""
+    def _check_allowlist_and_shorting(self, proposal: OrderProposal, context: GateContext) -> list[str]:
+        return []
+
+
+def test_planted_bug_catches_disabled_shorting_check() -> None:
+    """Verify that disabling shorting check allows shorting (caught as a defect)."""
+    now = datetime(2026, 11, 22, 12, 0, 0, tzinfo=UTC)
+    context = GateContext(
+        account_equity=Decimal("10000.00"),
+        peak_equity=Decimal("10000.00"),
+        daily_realized_loss=Decimal("0.00"),
+        open_positions={},  # Zero positions
+        open_position_notionals={},
+        orders_today_count=0,
+        allowed_instruments={"BTC/USDT"},
+        last_price=Decimal("30000.00"),
+        last_bar_ts=now - timedelta(minutes=5),
+        current_ts=now,
+        bar_interval=timedelta(hours=4),
+        kill_switch_active=False,
+        used_idempotency_keys=set(),
+        mode="PAPER"
+    )
+    sell_proposal = OrderProposal(
+        proposal_id=uuid.uuid4(),
+        idempotency_key=uuid.uuid4(),
+        symbol="BTC/USDT",
+        side=OrderSide.SELL,
+        order_type=OrderType.LIMIT,
+        price=Decimal("30000.00"),
+        size=Decimal("0.01"),
+        stop_loss=Decimal("31000.00"),
+        rationale_id="TEST_SHORT"
+    )
+
+    authentic_gate = RiskGate()
+    assert authentic_gate.evaluate(sell_proposal, context).passed is False
+
+    buggy_gate = MutatedRiskGate_NoShortingCheck()
+    assert buggy_gate.evaluate(sell_proposal, context).passed is True
+
+
+class MutatedRiskGate_NoReconciliationCheck(RiskGate):
+    """Planted Bug: Ignored reconciliation mismatch."""
+    def _check_freshness_and_reconciliation(self, context: GateContext) -> list[str]:
+        return []
+
+
+def test_planted_bug_catches_ignored_reconciliation_mismatch() -> None:
+    """Verify that ignoring reconciliation mismatch is caught as a defect."""
+    now = datetime(2026, 11, 22, 12, 0, 0, tzinfo=UTC)
+    context = GateContext(
+        account_equity=Decimal("10000.00"),
+        peak_equity=Decimal("10000.00"),
+        daily_realized_loss=Decimal("0.00"),
+        open_positions={},
+        open_position_notionals={},
+        orders_today_count=0,
+        allowed_instruments={"BTC/USDT"},
+        last_price=Decimal("30000.00"),
+        last_bar_ts=now - timedelta(minutes=5),
+        current_ts=now,
+        bar_interval=timedelta(hours=4),
+        kill_switch_active=False,
+        used_idempotency_keys=set(),
+        mode="PAPER",
+        reconciliation_matched=False  # Injected mismatch
+    )
+    proposal = OrderProposal(
+        proposal_id=uuid.uuid4(),
+        idempotency_key=uuid.uuid4(),
+        symbol="BTC/USDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.LIMIT,
+        price=Decimal("30000.00"),
+        size=Decimal("0.01"),
+        stop_loss=Decimal("29000.00"),
+        rationale_id="TEST_REC"
+    )
+
+    authentic_gate = RiskGate()
+    assert authentic_gate.evaluate(proposal, context).passed is False
+    assert any("reconciliation" in r.lower() for r in authentic_gate.evaluate(proposal, context).reasons)
+
+    buggy_gate = MutatedRiskGate_NoReconciliationCheck()
+    assert buggy_gate.evaluate(proposal, context).passed is True

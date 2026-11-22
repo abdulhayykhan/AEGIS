@@ -111,11 +111,12 @@ class BacktestEngine:
 
             current_price = current_bar.close
 
-            # Check stop loss if holding position
+            # Check stop loss if holding position (accounting for gap-throughs)
             if position_units > Decimal(0) and current_bar.low <= position_stop_loss:
-                # Stop loss triggered
-                effective_exit = position_stop_loss * (Decimal("1.0") - self.config.slippage_rate)
-                slippage_loss = (position_stop_loss - effective_exit) * position_units
+                # Stop loss triggered: gap-throughs fill at open if opened below stop price
+                fill_price = min(position_stop_loss, current_bar.open)
+                effective_exit = fill_price * (Decimal("1.0") - self.config.slippage_rate)
+                slippage_loss = (fill_price - effective_exit) * position_units
                 fee = (effective_exit * position_units) * self.config.fee_rate
                 gross_pnl = (effective_exit - position_entry_price) * position_units
                 net_pnl = gross_pnl - fee

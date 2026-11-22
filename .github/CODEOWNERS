@@ -2,6 +2,13 @@
 # Critical security and governance boundaries require mandatory owner review.
 
 /src/gate/                    @abdulhayykhan
+/src/connector/               @abdulhayykhan
+/src/migrations/              @abdulhayykhan
+/ops/                         @abdulhayykhan
+/.github/                     @abdulhayykhan
+/Dockerfile                   @abdulhayykhan
+/docker-compose.yml           @abdulhayykhan
+/pyproject.toml               @abdulhayykhan
 /docs/authority-envelope.md   @abdulhayykhan
 /docs/risk-policy.md          @abdulhayykhan
 /docs/role-contract.md        @abdulhayykhan
