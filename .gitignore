@@ -53,6 +53,9 @@ htmlcov/
 data/
 *.log
 
+# Documents & raw specs
+*.pdf
+
 # IDE & OS
 .vscode/
 .idea/
