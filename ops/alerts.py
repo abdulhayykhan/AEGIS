@@ -151,6 +151,20 @@ class AlertService:
         )
         return self._record(AlertLevel.INFO, text)
 
+    def notify_emergency_flatten(
+        self,
+        operator: str,
+        positions_flattened: int,
+        details: str = ""
+    ) -> AlertMessage:
+        text = (
+            f"[CRITICAL] EMERGENCY FLATTEN EXECUTED:\n"
+            f"Operator: {operator}\n"
+            f"Positions flattened: {positions_flattened}\n"
+            f"{details}"
+        )
+        return self._record(AlertLevel.CRITICAL, text)
+
     def notify_demotion(
         self,
         old_rung: str,

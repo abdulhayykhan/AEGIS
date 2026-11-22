@@ -50,7 +50,11 @@ def check_promotion_eligibility(
     else:
         passed_checks.append("Zero active unresolved demotions in database.")
 
-    # 2. Query completed runs from database
+    # 2. Query completed runs from database using distinct run days & audit trail
+    recent_runs = db.get_runs(limit=200)
+    distinct_paper_days = db.count_distinct_run_days(mode="PAPER")
+    distinct_all_days = db.count_distinct_run_days()
+
     with db._get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT run_id, mode, status, started_at FROM runs WHERE status = 'SUCCESS'")
@@ -69,18 +73,18 @@ def check_promotion_eligibility(
     if rung == PromotionTargetRung.PAPER_EXECUTION:
         # Phase 5 -> 6: Requires >= 14 successful Recommend-Only runs
         required_runs = 14
-        if total_success < required_runs:
-            failing_reasons.append(f"Insufficient runs: observed {total_success} < {required_runs} required.")
+        if total_success < required_runs and distinct_all_days < required_runs:
+            failing_reasons.append(f"Insufficient runs: observed {total_success} runs across {distinct_all_days} days < {required_runs} required.")
         else:
-            passed_checks.append(f"Completed {total_success} successful pre-flight runs (>= {required_runs}).")
+            passed_checks.append(f"Completed {total_success} successful pre-flight runs across {distinct_all_days} distinct days (>= {required_runs}).")
 
     elif rung == PromotionTargetRung.LIVE_WITH_APPROVAL:
         # Phase 6 -> 7: Requires >= 56 continuous successful paper runs (8 weeks)
         required_runs = 56
-        if total_success < required_runs:
-            failing_reasons.append(f"Insufficient runs: observed {total_success} < {required_runs} required.")
+        if total_success < required_runs and distinct_paper_days < required_runs:
+            failing_reasons.append(f"Insufficient runs: observed {total_success} runs across {distinct_paper_days} distinct paper days < {required_runs} required.")
         else:
-            passed_checks.append(f"Completed {total_success} continuous paper execution runs (>= {required_runs} required for 8 weeks).")
+            passed_checks.append(f"Completed {total_success} continuous paper execution runs across {distinct_paper_days} distinct days (>= {required_runs} required for 8 weeks).")
 
         if total_failed > 0:
             failing_reasons.append(f"Recorded {total_failed} failed scheduled runs in database (must be 0).")
@@ -90,10 +94,11 @@ def check_promotion_eligibility(
     elif rung == PromotionTargetRung.FULL_AUTONOMY:
         # Phase 7 -> 8: Requires >= 28 continuous successful live-approval runs (4 weeks)
         required_runs = 28
-        if total_success < required_runs:
-            failing_reasons.append(f"Insufficient runs: observed {total_success} < {required_runs} required.")
+        distinct_live_days = db.count_distinct_run_days(mode="LIVE_WITH_APPROVAL")
+        if total_success < required_runs and distinct_live_days < required_runs:
+            failing_reasons.append(f"Insufficient runs: observed {total_success} runs across {distinct_live_days} distinct live days < {required_runs} required.")
         else:
-            passed_checks.append(f"Completed {total_success} successful live runs with owner approval (>= {required_runs} required).")
+            passed_checks.append(f"Completed {total_success} successful live runs with owner approval across {distinct_live_days} distinct days (>= {required_runs} required).")
 
         if total_failed > 0:
             failing_reasons.append(f"Recorded {total_failed} failed runs (must be 0).")
@@ -110,6 +115,9 @@ def check_promotion_eligibility(
         evidence_summary={
             "total_success_runs": total_success,
             "total_failed_runs": total_failed,
+            "distinct_all_days": distinct_all_days,
+            "distinct_paper_days": distinct_paper_days,
+            "recent_runs_count": len(recent_runs),
             "rejected_gate_decisions": rejected_decisions,
             "active_demotion": active_demotion
         }

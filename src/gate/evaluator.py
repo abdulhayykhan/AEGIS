@@ -259,40 +259,109 @@ class RiskGate:
 
     def _check_approvals(self, proposal: OrderProposal, context: GateContext) -> list[str]:
         reasons: list[str] = []
-        # C3 & B3: Cryptographic / HMAC owner approval verification for LIVE_WITH_APPROVAL
+        # C3 & B3 & Review 3 N4: Cryptographic / HMAC owner approval verification for LIVE_WITH_APPROVAL
         if context.mode == "LIVE_WITH_APPROVAL":
-            expected_token = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
-            if not expected_token:
+            expected_secret = (
+                os.environ.get("AEGIS_APPROVAL_SECRET")
+                or os.environ.get("AEGIS_OWNER_SECRET")
+                or os.environ.get("AEGIS_OWNER_TOKEN")
+            )
+            ed25519_pubkey_hex = os.environ.get("AEGIS_APPROVAL_PUBLIC_KEY")
+
+            if not expected_secret and not ed25519_pubkey_hex:
                 reasons.append(
-                    "AEGIS_OWNER_SECRET environment variable is not configured; LIVE_WITH_APPROVAL orders cannot be authorized."
+                    "Approval credential is not configured (AEGIS_APPROVAL_SECRET or AEGIS_APPROVAL_PUBLIC_KEY required); LIVE_WITH_APPROVAL orders cannot be authorized."
                 )
                 return reasons
 
+            # Reject raw-secret attempt immediately (Review 3 N4 & Proof 6)
             token = context.approval_token
+            if token and expected_secret and hmac.compare_digest(token, expected_secret):
+                reasons.append(
+                    "Raw owner secret is forbidden as an approval credential. Orders require a signed cryptographic approval token covering order parameters, expiry, and nonce."
+                )
+                return reasons
+
+            # Extract signature components:
             sig = context.approval_signature
-            prop_id = context.proposal_id or proposal.proposal_id
+            expires_at = context.approval_expires_at
+            nonce = context.approval_nonce
+
+            if token and ":" in token and (not sig or not expires_at or not nonce):
+                parts = token.split(":")
+                if len(parts) == 3:
+                    sig, expires_at, nonce = parts[0], parts[1], parts[2]
+
+            if not sig:
+                reasons.append("Missing cryptographic approval signature for LIVE_WITH_APPROVAL order.")
+                return reasons
+
+            if not expires_at:
+                reasons.append("Missing approval expiry timestamp (expires_at required).")
+                return reasons
+
+            if not nonce:
+                reasons.append("Missing approval nonce (nonce required).")
+                return reasons
+
+            # Check expiry
+            try:
+                exp_dt = datetime.fromisoformat(expires_at)
+                if exp_dt <= context.current_ts:
+                    reasons.append(f"Approval signature has expired at {expires_at}.")
+                    return reasons
+            except (ValueError, TypeError) as e:
+                reasons.append(f"Invalid approval expiry format: {e}.")
+                return reasons
+
+            # Canonical message over all order parameters:
+            tp_str = str(proposal.take_profit) if proposal.take_profit is not None else ""
+            canonical_msg = f"{proposal.symbol}:{proposal.side.value}:{proposal.order_type.value}:{proposal.size}:{proposal.price}:{proposal.stop_loss}:{tp_str}:{expires_at}:{nonce}"
 
             valid = False
-            # Option 1: Direct owner token secret match (constant time compare)
-            if token and hmac.compare_digest(token, expected_token):
-                valid = True
-            # Option 2: HMAC signature over canonical proposal hash or proposal_id
-            elif sig and prop_id:
-                canonical_msg = f"{prop_id}:{proposal.symbol}:{proposal.side.value}:{proposal.size}:{proposal.price}:{proposal.stop_loss}"
-                computed_sig = hmac.new(
-                    expected_token.encode("utf-8"),
+            # Verify Ed25519 signature if public key provided
+            if ed25519_pubkey_hex:
+                try:
+                    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                    pubkey = Ed25519PublicKey.from_public_bytes(bytes.fromhex(ed25519_pubkey_hex))
+                    pubkey.verify(bytes.fromhex(sig), canonical_msg.encode("utf-8"))
+                    valid = True
+                except Exception:  # noqa: BLE001, S110
+                    pass
+
+            # Verify HMAC-SHA256 signature if secret provided
+            if not valid and expected_secret:
+                computed_canonical = hmac.new(
+                    expected_secret.encode("utf-8"),
                     canonical_msg.encode("utf-8"),
                     hashlib.sha256
                 ).hexdigest()
-                simple_sig = hmac.new(
-                    expected_token.encode("utf-8"),
-                    str(prop_id).encode("utf-8"),
-                    hashlib.sha256
-                ).hexdigest()
-                if hmac.compare_digest(sig, computed_sig) or hmac.compare_digest(sig, simple_sig):
+                if hmac.compare_digest(sig, computed_canonical):
                     valid = True
 
             if not valid:
-                reasons.append("Owner approval missing or invalid signature for LIVE_WITH_APPROVAL order.")
+                reasons.append("Cryptographic approval signature verification failed for order parameters.")
 
         return reasons
+
+
+def create_order_approval_signature(
+    secret: str,
+    symbol: str,
+    side: str,
+    order_type: str,
+    size: Decimal | str,
+    price: Decimal | str,
+    stop_loss: Decimal | str,
+    take_profit: Decimal | str | None,
+    expires_at: str,
+    nonce: str
+) -> str:
+    """Owner-side signer utility creating canonical HMAC-SHA256 signature over order parameters (N4)."""
+    tp_str = str(take_profit) if take_profit is not None else ""
+    canonical_msg = f"{symbol}:{side}:{order_type}:{size}:{price}:{stop_loss}:{tp_str}:{expires_at}:{nonce}"
+    return hmac.new(
+        secret.encode("utf-8"),
+        canonical_msg.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()

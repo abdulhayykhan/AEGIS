@@ -59,7 +59,8 @@ class BaseBroker(ABC):
         mark_price: Decimal,
         stop_loss: Decimal | None = None,
         take_profit: Decimal | None = None,
-        fee_rate: Decimal = Decimal("0.0010")
+        fee_rate: Decimal = Decimal("0.0010"),
+        order_id: uuid.UUID | None = None
     ) -> BrokerOrder:
         """Submit order to exchange execution venue."""
         ...
@@ -135,9 +136,10 @@ class PaperBroker(BaseBroker):
         mark_price: Decimal,
         stop_loss: Decimal | None = None,
         take_profit: Decimal | None = None,
-        fee_rate: Decimal = Decimal("0.0010")  # 0.10% taker fee per PRD Section 11
+        fee_rate: Decimal = Decimal("0.0010"),  # 0.10% taker fee per PRD Section 11
+        order_id: uuid.UUID | None = None
     ) -> BrokerOrder:
-        order_id = uuid.uuid4()
+        order_id = order_id or uuid.uuid4()
         now = datetime.now(UTC)
 
         # Immediate fill simulation for limit orders at or better than mark price
@@ -348,11 +350,29 @@ class ExchangeVenueConfig(BaseModel):
 
     venue_name: str  # "BINANCE_TESTNET", "COINBASE_SANDBOX", "BYBIT_TESTNET"
     api_endpoint: str
+    api_key: str = ""
+    api_secret: str = ""
     rate_limit_req_per_sec: int = 10
     timeout_seconds: float = 5.0
     max_retries: int = 3
     backoff_factor: float = 0.5
     dry_run: bool = True
+
+    @classmethod
+    def from_env(cls) -> "ExchangeVenueConfig":
+        import os
+        api_key = os.environ.get("EXCHANGE_API_KEY", "")
+        api_secret = os.environ.get("EXCHANGE_API_SECRET", "")
+        testnet = os.environ.get("EXCHANGE_TESTNET", "true").lower() in ("true", "1")
+        venue_name = os.environ.get("EXCHANGE_VENUE", "BINANCE_TESTNET")
+        endpoint = os.environ.get("EXCHANGE_API_ENDPOINT", "https://testnet.binance.vision/api/v3")
+        return cls(
+            venue_name=venue_name,
+            api_endpoint=endpoint,
+            api_key=api_key,
+            api_secret=api_secret,
+            dry_run=testnet
+        )
 
 
 class PluggableExchangeBroker(BaseBroker):
@@ -416,7 +436,8 @@ class PluggableExchangeBroker(BaseBroker):
         mark_price: Decimal,
         stop_loss: Decimal | None = None,
         take_profit: Decimal | None = None,
-        fee_rate: Decimal = Decimal("0.0010")
+        fee_rate: Decimal = Decimal("0.0010"),
+        order_id: uuid.UUID | None = None
     ) -> BrokerOrder:
         # In dry_run or testnet mode, route safely through verified execution simulator
         return self.fallback_paper.place_order(
@@ -428,7 +449,8 @@ class PluggableExchangeBroker(BaseBroker):
             mark_price=mark_price,
             stop_loss=stop_loss,
             take_profit=take_profit,
-            fee_rate=fee_rate
+            fee_rate=fee_rate,
+            order_id=order_id
         )
 
     def check_protective_stops(self, current_prices: dict[str, Decimal]) -> list[dict[str, Any]]:

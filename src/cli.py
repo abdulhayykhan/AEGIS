@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     # 5. Emergency Flatten
     flatten_parser = subparsers.add_parser("flatten", help="Emergency flatten: close all open positions with reduce-only orders (B6)")
     flatten_parser.add_argument("--owner", default="Abdul Hayy Khan", help="Operator identity")
+    flatten_parser.add_argument("--token", default=None, help="Owner security token required to execute emergency flatten")
 
     # 6. Reconcile
     subparsers.add_parser("reconcile", help="Verify minor-unit reconciliation between DB and broker")
@@ -68,7 +69,9 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    server = AegisConnectorServer(mode="PAPER")
+    mode_arg = getattr(args, "mode", "PAPER_EXECUTION")
+    conn_mode = "LIVE" if mode_arg in ("LIVE_WITH_APPROVAL", "FULL_AUTONOMY") else "PAPER"
+    server = AegisConnectorServer(mode=conn_mode)
     server.seed_mock_data()
 
     if args.subcommand == "dashboard":
@@ -107,16 +110,34 @@ def main() -> int:
     elif args.subcommand == "restore":
         import hmac
         import os
-        env_secret = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
-        if env_secret and (not args.token or not hmac.compare_digest(args.token, env_secret)):
-            print("Error: Invalid or missing owner security token. Cannot resolve demotion incident.")
+        restore_secret = (
+            os.environ.get("AEGIS_RESTORE_SECRET")
+            or os.environ.get("AEGIS_OWNER_SECRET")
+            or os.environ.get("AEGIS_OWNER_TOKEN")
+        )
+        if not restore_secret or not args.token or not hmac.compare_digest(args.token, restore_secret):
+            print("Error: Invalid or missing owner restore security token. Cannot resolve demotion incident (fail-closed).")
             return 1
         server.db.resolve_demotion(incident_id=args.incident, operator=args.owner)
         print(f"Incident '{args.incident}' resolved by {args.owner}. Autonomy rung restored.")
         return 0
 
     elif args.subcommand == "flatten":
-        results = server.flatten_positions()
+        import hmac
+        import os
+        flatten_secret = (
+            os.environ.get("AEGIS_FLATTEN_SECRET")
+            or os.environ.get("AEGIS_OWNER_SECRET")
+            or os.environ.get("AEGIS_OWNER_TOKEN")
+        )
+        if not flatten_secret or not args.token or not hmac.compare_digest(args.token, flatten_secret):
+            print("Error: Invalid or missing flatten security token. Emergency flatten rejected (fail-closed).")
+            return 1
+        try:
+            results = server.flatten_positions(operator=args.owner, token=args.token)
+        except PermissionError as e:
+            print(f"Error: {e}")
+            return 1
         print(f"Emergency Flatten executed by {args.owner}. Closed {len(results)} positions.")
         for r in results:
             print(f"- {r['symbol']}: {r['size']} units at ${r['price']} ({r['status']})")

@@ -1,4 +1,3 @@
-import hashlib
 import hmac
 import os
 import uuid
@@ -8,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from ops.alerts import AlertService
 from src.connector.broker import BaseBroker, PaperBroker, Position
 from src.gate.evaluator import GateConfig, RiskGate
 from src.gate.kill_switch import StandaloneKillSwitch
@@ -39,12 +39,14 @@ class AegisConnectorServer:
         mode: str = "PAPER",
         gate_config: GateConfig | None = None,
         db: Database | None = None,
-        broker: BaseBroker | None = None
+        broker: BaseBroker | None = None,
+        alert_service: AlertService | None = None
     ) -> None:
         self.mode = mode
         self.db = db or Database()
         self.broker = broker or PaperBroker(initial_cash=Decimal("10000.00"))
         self.gate = RiskGate(config=gate_config or GateConfig())
+        self.alert_service = alert_service or AlertService()
         
         # 1. Restore positions and protective stops from persistent storage
         persisted_positions = self.db.get_positions()
@@ -73,7 +75,7 @@ class AegisConnectorServer:
                     "price": str(f["price"]),
                     "size": str(f["size"]),
                     "fee": str(f["fee"]),
-                    "realized_pnl": "0.00",
+                    "realized_pnl": str(f.get("realized_pnl", "0.00")),
                     "ts": f["filled_at"]
                 }
                 for f in db_fills
@@ -99,11 +101,24 @@ class AegisConnectorServer:
                 except ValueError:
                     pass
 
+        # 4. Reconcile any pending intent orders (N5)
+        for o in self.db.get_orders(status="SUBMITTED"):
+            try:
+                o_uuid = uuid.UUID(str(o["order_id"]))
+                b_order = self.broker.orders.get(o_uuid)
+                if b_order and b_order.status == "FILLED":
+                    self.db.update_order_status(o["order_id"], "FILLED")
+                elif not b_order or b_order.status == "CANCELLED":
+                    # Order was cancelled or never received by broker; mark cancelled
+                    self.db.update_order_status(o["order_id"], "CANCELLED")
+            except (ValueError, KeyError):
+                pass
+
         self.bars_db: dict[str, list[dict[str, Any]]] = {}
         self.news_db: list[dict[str, Any]] = []
-        self.orders_today_count = 0
+        self.orders_today_count = self.db.count_daily_orders()
         self.last_order_date = datetime.now(UTC).date()
-        self.daily_realized_loss = Decimal("0.00")
+        self.daily_realized_loss = self.db.get_daily_realized_loss()
         self.peak_equity = self.db.get_max_equity(default=self.broker.cash)
         latest_snap = self.db.get_latest_equity_snapshot()
         if latest_snap:
@@ -273,6 +288,47 @@ class AegisConnectorServer:
             "idempotency_key": str(idem_key)
         }
 
+    def reconcile_broker_and_ledger(self) -> tuple[bool, list[str]]:
+        """Verify minor-unit reconciliation between broker and immutable DB fills ledger (B4 & N7)."""
+        acc_summary = self.get_account()
+        diffs: list[str] = []
+        db_fills = self.db.get_fills()
+
+        if not db_fills:
+            matched = True
+        else:
+            ledger = self.db.reconstruct_ledger(initial_cash=getattr(self.broker, "initial_cash", Decimal("10000.00")))
+
+            # 1. Cash reconciliation
+            broker_cash = Decimal(str(acc_summary["cash"]))
+            ledger_cash = Decimal(str(ledger["cash"]))
+            if abs(broker_cash - ledger_cash) >= Decimal("0.05"):
+                diffs.append(f"Cash divergence: broker={broker_cash:.2f} vs ledger={ledger_cash:.2f}")
+
+            # 2. Position reconciliation (size & presence)
+            broker_positions = {sym: Decimal(str(pos["size"])) for sym, pos in acc_summary["positions"].items() if Decimal(str(pos["size"])) > 0}
+            ledger_positions = {sym: Decimal(str(pos["size"])) for sym, pos in ledger["positions"].items() if Decimal(str(pos["size"])) > 0}
+            all_syms = set(broker_positions.keys()) | set(ledger_positions.keys())
+            for sym in all_syms:
+                b_size = broker_positions.get(sym, Decimal(0))
+                l_size = ledger_positions.get(sym, Decimal(0))
+                if b_size != l_size:
+                    diffs.append(f"Position divergence for {sym}: broker={b_size} vs ledger={l_size}")
+
+            # 3. Open orders reconciliation
+            broker_open_orders = {str(o["order_id"]) for o in self.broker.get_open_orders()}
+            db_open_orders = {str(o["order_id"]) for o in self.db.get_orders(status="SUBMITTED")}
+            if broker_open_orders != db_open_orders:
+                diffs.append(f"Open order divergence: broker={broker_open_orders} vs db={db_open_orders}")
+
+            matched = len(diffs) == 0
+
+        try:
+            self.db.record_reconciliation(matched=matched, diffs=diffs)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        return matched, diffs
+
     # --- Tool 6: place_order ---
     def place_order(
         self,
@@ -280,6 +336,8 @@ class AegisConnectorServer:
         idempotency_key: str | uuid.UUID,
         approval_token: str | None = None,
         approval_signature: str | None = None,
+        approval_expires_at: str | None = None,
+        approval_nonce: str | None = None,
         current_ts: datetime | None = None
     ) -> dict[str, Any]:
         """Run the Risk Gate then send order to broker. Authority: Execute (Gated)."""
@@ -314,21 +372,25 @@ class AegisConnectorServer:
         proposal = stored.proposal
         now = current_ts or datetime.now(UTC)
 
-        # C4: Reset daily counters at midnight UTC
+        # C4 & N3: Reset and accumulate daily counters across process restarts using DB
         today = now.date()
         if today > self.last_order_date:
             self.orders_today_count = 0
             self.daily_realized_loss = Decimal("0.00")
             self.last_order_date = today
 
-        # C4 & Proof F: Dynamically compute daily realized loss from broker trade history
-        today_start = datetime(today.year, today.month, today.day, tzinfo=UTC)
-        accumulated_today_losses = Decimal("0.00")
-        for t in self.broker.trade_history:
-            trade_ts = datetime.fromisoformat(t["ts"])
-            if trade_ts >= today_start and Decimal(t.get("realized_pnl", "0")) < Decimal(0):
-                accumulated_today_losses += abs(Decimal(t["realized_pnl"]))
-        self.daily_realized_loss = max(self.daily_realized_loss, accumulated_today_losses)
+        today_orders = self.db.count_daily_orders(str(today))
+        today_loss = self.db.get_daily_realized_loss(str(today))
+        self.orders_today_count = max(self.orders_today_count, today_orders)
+        self.daily_realized_loss = max(self.daily_realized_loss, today_loss)
+
+        # N4: Single-use replay protection on approval nonce
+        if approval_nonce and self.db.is_approval_nonce_used(approval_nonce):
+            return {
+                "passed": False,
+                "status": "REJECTED",
+                "reasons": [f"Reused approval nonce '{approval_nonce}': single-use replay prevention violated (N4)."]
+            }
 
         acc_summary = self.get_account()
         equity = Decimal(acc_summary["equity"])
@@ -357,22 +419,8 @@ class AegisConnectorServer:
 
         gate_mode = self.mode
 
-        # C5 & B4: Compute actual ledger vs broker reconciliation
-        db_fills = self.db.get_fills()
-        if not db_fills:
-            reconciliation_matched = True
-        else:
-            ledger = self.db.reconstruct_ledger(initial_cash=getattr(self.broker, "initial_cash", Decimal("10000.00")))
-            broker_cash = Decimal(str(acc_summary["cash"]))
-            ledger_cash = Decimal(str(ledger["cash"]))
-            reconciliation_matched = (abs(broker_cash - ledger_cash) < Decimal("0.05"))
-        try:
-            self.db.record_reconciliation(
-                matched=reconciliation_matched,
-                diffs=[] if reconciliation_matched else [f"Cash divergence: broker={acc_summary['cash']} vs ledger={ledger['cash']}"]
-            )
-        except Exception:  # noqa: BLE001, S110
-            pass
+        # C5 & B4 & N7: Comprehensive reconciliation across cash, positions, and open orders
+        reconciliation_matched, _ = self.reconcile_broker_and_ledger()
 
         # Construct deterministic gate context with full wiring
         context = GateContext(
@@ -394,6 +442,8 @@ class AegisConnectorServer:
             reconciliation_matched=reconciliation_matched,
             approval_token=approval_token,
             approval_signature=approval_signature,
+            approval_expires_at=approval_expires_at,
+            approval_nonce=approval_nonce,
             proposal_id=p_id
         )
 
@@ -431,8 +481,30 @@ class AegisConnectorServer:
         self.executed_proposal_ids.add(p_id)
         self.used_idempotency_keys.add(proposal.idempotency_key)
         self.used_idempotency_keys.add(i_key)
-        self.orders_today_count += 1
 
+        # N5: Write INTENT row in database FIRST before sending order to broker
+        order_id = uuid.uuid4()
+        order_dict = {
+            "order_id": str(order_id),
+            "proposal_id": str(p_id),
+            "symbol": proposal.symbol,
+            "side": proposal.side.value,
+            "order_type": proposal.order_type.value,
+            "price": str(proposal.price),
+            "size": str(proposal.size),
+            "status": "SUBMITTED",
+            "created_at": now.isoformat()
+        }
+        try:
+            self.db.record_order(order_dict)
+        except Exception as e:  # noqa: BLE001
+            return {
+                "passed": False,
+                "status": "ERROR",
+                "reasons": [f"Database intent write failed before execution: {e}. Order aborted."]
+            }
+
+        # Now send order to execution broker
         broker_order = self.broker.place_order(
             symbol=proposal.symbol,
             side=proposal.side,
@@ -441,26 +513,18 @@ class AegisConnectorServer:
             size=proposal.size,
             mark_price=mark_price,
             stop_loss=proposal.stop_loss,
-            take_profit=proposal.take_profit
+            take_profit=proposal.take_profit,
+            order_id=order_id
         )
 
-        # Persist execution state atomically to database (B7 & Proof 10)
+        # Persist execution state atomically to database (B7 & Proof 10 & N1 & N4)
         try:
             self.db.mark_proposal_executed(p_id)
             pos = self.broker.positions.get(proposal.symbol)
             pos_size = pos.size if pos else Decimal(0)
             pos_avg = pos.avg_price if pos else Decimal(0)
-            order_dict = {
-                "order_id": str(broker_order.order_id),
-                "proposal_id": str(p_id),
-                "symbol": broker_order.symbol,
-                "side": broker_order.side.value,
-                "order_type": broker_order.order_type.value,
-                "price": str(broker_order.price),
-                "size": str(broker_order.size),
-                "status": broker_order.status,
-                "created_at": broker_order.created_at.isoformat()
-            }
+            order_dict["status"] = broker_order.status
+
             fill_dict = {
                 "fill_id": str(uuid.uuid4()),
                 "order_id": str(broker_order.order_id),
@@ -469,9 +533,18 @@ class AegisConnectorServer:
                 "price": str(broker_order.price),
                 "size": str(broker_order.size),
                 "fee": str(broker_order.price * broker_order.size * Decimal("0.0010")),
+                "realized_pnl": "0.00",
                 "filled_at": now.isoformat()
             } if broker_order.status == "FILLED" else {}
-            pos_update = (proposal.symbol, pos_size, pos_avg) if broker_order.status == "FILLED" else None
+
+            pos_update = (
+                proposal.symbol,
+                pos_size,
+                pos_avg,
+                str(proposal.stop_loss) if proposal.stop_loss else None,
+                str(proposal.take_profit) if proposal.take_profit else None
+            ) if broker_order.status == "FILLED" else None
+
             snapshot_dict = {
                 "snapshot_id": str(uuid.uuid4()),
                 "equity": Decimal(self.get_account()["equity"]),
@@ -484,12 +557,24 @@ class AegisConnectorServer:
                 position_update=pos_update,
                 snapshot_dict=snapshot_dict
             )
+
+            # Record approval record if cryptographic signature and nonce were used (N4)
+            if approval_signature and approval_nonce:
+                self.db.record_approval(
+                    proposal_hash=str(p_id),
+                    signer="Abdul Hayy Khan",
+                    nonce=approval_nonce,
+                    expires_at=approval_expires_at or (now + timedelta(hours=1)).isoformat()
+                )
         except Exception as e:  # noqa: BLE001
             return {
                 "passed": False,
                 "status": "ERROR",
                 "reasons": [f"Database atomic execution recording failed: {e}"]
             }
+
+        self.orders_today_count = self.db.count_daily_orders()
+        self.daily_realized_loss = self.db.get_daily_realized_loss()
 
         return {
             "passed": True,
@@ -498,23 +583,80 @@ class AegisConnectorServer:
             "checks": gate_decision.checks
         }
 
-    def flatten_positions(self) -> list[dict[str, Any]]:
-        """Emergency flatten: close all open positions with reduce-only orders, bypassing kill switch (B6)."""
+    def flatten_positions(self, operator: str = "Abdul Hayy Khan", token: str | None = None) -> list[dict[str, Any]]:
+        """Emergency flatten: close all open positions with reduce-only orders, bypassing kill switch (B6 & N2)."""
+        flatten_secret = os.environ.get("AEGIS_FLATTEN_SECRET") or os.environ.get("AEGIS_OWNER_SECRET")
+        if not flatten_secret or not token or not hmac.compare_digest(token, flatten_secret):
+            raise PermissionError("Unauthorized flatten attempt: invalid or missing flatten credentials (fail-closed).")
+
+        # 1. Cancel all resting open orders first
+        self.broker.cancel_all_open_orders()
+
         results: list[dict[str, Any]] = []
+        now = datetime.now(UTC)
+
         for sym, pos in list(self.broker.positions.items()):
             if pos.size <= Decimal(0):
                 continue
             mark_price = self.get_mark_price(sym)
             if mark_price <= Decimal(0):
                 mark_price = pos.avg_price
+
+            order_id = uuid.uuid4()
+            order_dict = {
+                "order_id": str(order_id),
+                "proposal_id": "",
+                "symbol": sym,
+                "side": OrderSide.SELL.value,
+                "order_type": OrderType.LIMIT.value,
+                "price": str(mark_price),
+                "size": str(pos.size),
+                "status": "SUBMITTED",
+                "created_at": now.isoformat()
+            }
+            self.db.record_order(order_dict)
+
             order = self.broker.place_order(
                 symbol=sym,
                 side=OrderSide.SELL,
                 order_type=OrderType.LIMIT,
                 price=mark_price,
                 size=pos.size,
-                mark_price=mark_price
+                mark_price=mark_price,
+                order_id=order_id
             )
+
+            cost = mark_price * pos.size
+            fee = cost * Decimal("0.0010")
+            realized_pnl = (mark_price - pos.avg_price) * pos.size
+
+            order_dict["status"] = order.status
+            fill_dict = {
+                "fill_id": str(uuid.uuid4()),
+                "order_id": str(order_id),
+                "symbol": sym,
+                "side": OrderSide.SELL.value,
+                "price": str(mark_price),
+                "size": str(pos.size),
+                "fee": str(fee),
+                "realized_pnl": str(realized_pnl),
+                "filled_at": now.isoformat()
+            }
+            pos_update = (sym, Decimal(0), Decimal(0), None, None)
+            snapshot_dict = {
+                "snapshot_id": str(uuid.uuid4()),
+                "equity": Decimal(self.get_account()["equity"]),
+                "cash": self.broker.cash,
+                "daily_realized_loss": self.daily_realized_loss
+            }
+
+            self.db.atomic_execute_order_and_fill(
+                order_dict=order_dict,
+                fill_dict=fill_dict,
+                position_update=pos_update,
+                snapshot_dict=snapshot_dict
+            )
+
             results.append({
                 "symbol": sym,
                 "order_id": str(order.order_id),
@@ -522,16 +664,21 @@ class AegisConnectorServer:
                 "size": str(pos.size),
                 "price": str(mark_price)
             })
-            self.db.update_position(sym, Decimal(0), Decimal(0))
-            self.db.record_equity_snapshot(
-                equity=Decimal(self.get_account()["equity"]),
-                cash=self.broker.cash,
-                daily_realized_loss=self.daily_realized_loss
+
+        self.daily_realized_loss = self.db.get_daily_realized_loss()
+        self.orders_today_count = self.db.count_daily_orders()
+
+        if results:
+            self.alert_service.notify_emergency_flatten(
+                operator=operator,
+                positions_flattened=len(results),
+                details=", ".join(f"{r['symbol']} ({r['size']} @ {r['price']})" for r in results)
             )
+
         return results
 
     def check_stops(self) -> list[dict[str, Any]]:
-        """Check protective stops across active positions and persist any fills (B5).
+        """Check protective stops across active positions and persist any fills (B5 & N1 & N2).
 
         If any active position is missing a protective stop, triggers emergency flatten (Page 14).
         """
@@ -558,29 +705,52 @@ class AegisConnectorServer:
                     "price": str(mark_p),
                     "size": str(pos.size),
                     "fee": str(mark_p * pos.size * Decimal("0.0010")),
+                    "realized_pnl": str((mark_p - pos.avg_price) * pos.size),
                     "ts": datetime.now(UTC).isoformat(),
                     "reason": "FLATTEN_MISSING_PROTECTIVE_STOP"
                 })
 
         for stop_fill in executed:
-            try:
-                self.db.record_fill({
-                    "order_id": stop_fill["order_id"],
-                    "symbol": stop_fill["symbol"],
-                    "side": stop_fill["side"],
-                    "price": stop_fill["price"],
-                    "size": stop_fill["size"],
-                    "fee": stop_fill["fee"],
-                    "filled_at": stop_fill["ts"]
-                })
-                self.db.update_position(stop_fill["symbol"], Decimal(0), Decimal(0))
-                self.db.record_equity_snapshot(
-                    equity=Decimal(self.get_account()["equity"]),
-                    cash=self.broker.cash,
-                    daily_realized_loss=self.daily_realized_loss
-                )
-            except Exception:  # noqa: BLE001, S110
-                pass
+            now_iso = stop_fill["ts"]
+            o_id = stop_fill["order_id"]
+            order_dict = {
+                "order_id": o_id,
+                "proposal_id": "",
+                "symbol": stop_fill["symbol"],
+                "side": stop_fill["side"],
+                "order_type": "LIMIT",
+                "price": stop_fill["price"],
+                "size": stop_fill["size"],
+                "status": "FILLED",
+                "created_at": now_iso
+            }
+            fill_dict = {
+                "fill_id": str(uuid.uuid4()),
+                "order_id": o_id,
+                "symbol": stop_fill["symbol"],
+                "side": stop_fill["side"],
+                "price": stop_fill["price"],
+                "size": stop_fill["size"],
+                "fee": stop_fill["fee"],
+                "realized_pnl": stop_fill.get("realized_pnl", "0.00"),
+                "filled_at": now_iso
+            }
+            pos_update = (stop_fill["symbol"], Decimal(0), Decimal(0), None, None)
+            snapshot_dict = {
+                "snapshot_id": str(uuid.uuid4()),
+                "equity": Decimal(self.get_account()["equity"]),
+                "cash": self.broker.cash,
+                "daily_realized_loss": self.daily_realized_loss
+            }
+            self.db.atomic_execute_order_and_fill(
+                order_dict=order_dict,
+                fill_dict=fill_dict,
+                position_update=pos_update,
+                snapshot_dict=snapshot_dict
+            )
+
+        self.daily_realized_loss = self.db.get_daily_realized_loss()
+        self.orders_today_count = self.db.count_daily_orders()
         return executed
 
     # --- Tool 7: cancel_order ---
@@ -673,37 +843,12 @@ class AegisConnectorServer:
         proposal_id: str | uuid.UUID,
         approval_token: str | None = None,
         approval_signature: str | None = None,
+        approval_expires_at: str | None = None,
+        approval_nonce: str | None = None,
         current_ts: datetime | None = None
     ) -> dict[str, Any]:
-        """Verify owner approval signature and execute order through Risk Gate (B3)."""
+        """Verify owner approval signature and execute order through Risk Gate (N4)."""
         p_id = uuid.UUID(str(proposal_id))
-        env_secret = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
-        if not env_secret:
-            return {
-                "passed": False,
-                "reasons": ["AEGIS_OWNER_SECRET environment variable is not configured; cannot approve orders."]
-            }
-
-        is_valid = False
-        if approval_token and hmac.compare_digest(approval_token, env_secret):
-            is_valid = True
-        elif approval_signature:
-            try:
-                computed_hmac = hmac.new(
-                    env_secret.encode("utf-8"),
-                    str(p_id).encode("utf-8"),
-                    hashlib.sha256
-                ).hexdigest()
-                is_valid = hmac.compare_digest(approval_signature, computed_hmac)
-            except Exception:  # noqa: BLE001
-                is_valid = False
-
-        if not is_valid:
-            return {
-                "passed": False,
-                "reasons": ["Invalid or missing owner approval token/signature."]
-            }
-
         stored = self.proposals.get(p_id)
         if not stored:
             return {
@@ -711,10 +856,48 @@ class AegisConnectorServer:
                 "reasons": [f"Proposal ID '{p_id}' not found."]
             }
 
+        env_secret = (
+            os.environ.get("AEGIS_APPROVAL_SECRET")
+            or os.environ.get("AEGIS_OWNER_SECRET")
+            or os.environ.get("AEGIS_OWNER_TOKEN")
+        )
+
+        eff_sig = approval_signature
+        eff_exp = approval_expires_at
+        eff_nonce = approval_nonce
+
+        # If approval_token provided to approve_and_place_order (e.g. from CLI or Telegram supervisor)
+        if approval_token:
+            if not env_secret or not hmac.compare_digest(approval_token, env_secret):
+                return {
+                    "passed": False,
+                    "reasons": ["Invalid or missing owner approval token."]
+                }
+            # Generate cryptographic approval signature
+            from src.gate.evaluator import create_order_approval_signature
+            now = current_ts or datetime.now(UTC)
+            eff_exp = eff_exp or (now + timedelta(hours=1)).isoformat()
+            eff_nonce = eff_nonce or uuid.uuid4().hex
+            prop = stored.proposal
+            eff_sig = create_order_approval_signature(
+                secret=env_secret,
+                symbol=prop.symbol,
+                side=prop.side.value,
+                order_type=prop.order_type.value,
+                size=prop.size,
+                price=prop.price,
+                stop_loss=prop.stop_loss,
+                take_profit=prop.take_profit,
+                expires_at=eff_exp,
+                nonce=eff_nonce
+            )
+
         order_res = self.place_order(
             proposal_id=p_id,
             idempotency_key=stored.idempotency_key,
-            approval_token=approval_token,
+            approval_signature=eff_sig,
+            approval_expires_at=eff_exp,
+            approval_nonce=eff_nonce,
             current_ts=current_ts
         )
         if not order_res.get("passed"):

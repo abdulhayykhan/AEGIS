@@ -142,15 +142,35 @@ class Database:
                 )
             """)
 
-            # Open positions
+            # Open positions (PRD Section 6 & Review 3 N1)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS positions (
                     symbol TEXT PRIMARY KEY,
                     size TEXT NOT NULL,
                     avg_entry_price TEXT NOT NULL,
+                    stop_loss TEXT,
+                    take_profit TEXT,
                     updated_at TEXT NOT NULL
                 )
             """)
+            cursor.execute("PRAGMA table_info(positions)")
+            pos_cols = {row["name"] for row in cursor.fetchall()}
+            if pos_cols and "stop_loss" not in pos_cols:
+                cursor.execute("ALTER TABLE positions ADD COLUMN stop_loss TEXT")
+            if pos_cols and "take_profit" not in pos_cols:
+                cursor.execute("ALTER TABLE positions ADD COLUMN take_profit TEXT")
+
+            # Fills table with realized_pnl tracking (Review 3 N3)
+            cursor.execute("PRAGMA table_info(fills)")
+            fill_cols = {row["name"] for row in cursor.fetchall()}
+            if fill_cols and "realized_pnl" not in fill_cols:
+                cursor.execute("ALTER TABLE fills ADD COLUMN realized_pnl TEXT NOT NULL DEFAULT '0.00'")
+
+            # Runs table with details_json
+            cursor.execute("PRAGMA table_info(runs)")
+            run_cols = {row["name"] for row in cursor.fetchall()}
+            if run_cols and "details_json" not in run_cols:
+                cursor.execute("ALTER TABLE runs ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'")
 
             # Equity snapshots
             cursor.execute("""
@@ -217,6 +237,10 @@ class Database:
             cursor.execute("""
                 INSERT OR IGNORE INTO schema_migrations (version, applied_at, description)
                 VALUES (2, ?, 'Add reconciliations and approvals audit tables')
+            """, (datetime.now(UTC).isoformat(),))
+            cursor.execute("""
+                INSERT OR IGNORE INTO schema_migrations (version, applied_at, description)
+                VALUES (3, ?, 'Add stop_loss and take_profit to positions, realized_pnl to fills, details_json to runs')
             """, (datetime.now(UTC).isoformat(),))
             conn.commit()
 
@@ -335,9 +359,9 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO runs (
-                    run_id, mode, started_at, completed_at, status, turns_executed, cost_usd, summary
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (run_id, mode, start, comp, status, turns_executed, str(cost_usd), error_message))
+                    run_id, mode, started_at, completed_at, status, turns_executed, cost_usd, summary, details_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (run_id, mode, start, comp, status, turns_executed, str(cost_usd), error_message, details_json))
             conn.commit()
 
     # --- Proposal operations ---
@@ -478,8 +502,16 @@ class Database:
             cursor.execute("SELECT * FROM reconciliations ORDER BY ts DESC LIMIT ?", (limit,))
             return [dict(r) for r in cursor.fetchall()]
 
-    def record_approval(self, proposal_hash: str, signer: str, expires_at: str, nonce: str) -> str:
-        app_id = str(uuid.uuid4())
+    def record_approval(
+        self,
+        proposal_hash: str,
+        signer: str,
+        expires_at: str,
+        nonce: str,
+        approval_id: str | None = None,
+        **kwargs: Any
+    ) -> str:
+        app_id = approval_id or str(uuid.uuid4())
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -538,11 +570,39 @@ class Database:
                 cursor.execute("SELECT * FROM fills ORDER BY filled_at ASC")
             return [dict(r) for r in cursor.fetchall()]
 
+    def record_order(self, order_dict: dict[str, Any]) -> None:
+        """Record an order intent or order state to the database (Review 3 N5)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO orders (
+                    order_id, proposal_id, symbol, side, order_type, price, size, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                str(order_dict["order_id"]),
+                str(order_dict.get("proposal_id", "")),
+                str(order_dict["symbol"]),
+                str(order_dict["side"]),
+                str(order_dict["order_type"]),
+                str(order_dict["price"]),
+                str(order_dict["size"]),
+                str(order_dict["status"]),
+                str(order_dict.get("created_at", datetime.now(UTC).isoformat()))
+            ))
+            conn.commit()
+
+    def update_order_status(self, order_id: str, status: str) -> None:
+        """Update existing order status (e.g. SUBMITTED -> FILLED or REJECTED)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE orders SET status = ? WHERE order_id = ?", (status, str(order_id)))
+            conn.commit()
+
     def atomic_execute_order_and_fill(
         self,
         order_dict: dict[str, Any],
         fill_dict: dict[str, Any] | None = None,
-        position_update: tuple[str, Decimal, Decimal] | None = None,
+        position_update: tuple[Any, ...] | None = None,
         snapshot_dict: dict[str, Any] | None = None,
         event_dict: dict[str, Any] | None = None
     ) -> None:
@@ -570,8 +630,8 @@ class Database:
             if fill_dict:
                 cursor.execute("""
                     INSERT INTO fills (
-                        fill_id, order_id, symbol, side, price, size, fee, filled_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        fill_id, order_id, symbol, side, price, size, fee, filled_at, realized_pnl
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     str(fill_dict.get("fill_id", uuid.uuid4())),
                     str(fill_dict["order_id"]),
@@ -580,19 +640,32 @@ class Database:
                     str(fill_dict["price"]),
                     str(fill_dict["size"]),
                     str(fill_dict.get("fee", "0.00")),
-                    str(fill_dict.get("filled_at", datetime.now(UTC).isoformat()))
+                    str(fill_dict.get("filled_at", datetime.now(UTC).isoformat())),
+                    str(fill_dict.get("realized_pnl", "0.00"))
                 ))
 
-            # 3. Update Position if provided
+            # 3. Update Position if provided (with stop_loss and take_profit - Review 3 N1)
             if position_update:
-                sym, size, avg_p = position_update
-                if size <= Decimal(0):
-                    cursor.execute("DELETE FROM positions WHERE symbol = ?", (sym,))
+                if len(position_update) >= 5:
+                    sym, size, avg_p, s_loss, t_profit = position_update[:5]
+                else:
+                    sym, size, avg_p = position_update[:3]
+                    s_loss, t_profit = None, None
+
+                if Decimal(str(size)) <= Decimal(0):
+                    cursor.execute("DELETE FROM positions WHERE symbol = ?", (str(sym),))
                 else:
                     cursor.execute("""
-                        INSERT OR REPLACE INTO positions (symbol, size, avg_entry_price, updated_at)
-                        VALUES (?, ?, ?, ?)
-                    """, (sym, str(size), str(avg_p), datetime.now(UTC).isoformat()))
+                        INSERT OR REPLACE INTO positions (symbol, size, avg_entry_price, stop_loss, take_profit, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(sym),
+                        str(size),
+                        str(avg_p),
+                        str(s_loss) if s_loss is not None else None,
+                        str(t_profit) if t_profit is not None else None,
+                        datetime.now(UTC).isoformat()
+                    ))
 
             # 4. Record Snapshot if provided
             if snapshot_dict:
@@ -607,18 +680,24 @@ class Database:
                     str(snapshot_dict["daily_realized_loss"])
                 ))
 
-            # 5. Record Event if provided
-            if event_dict:
-                cursor.execute("""
-                    INSERT INTO event_ledger (event_id, event_type, aggregate_id, payload_json, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (
-                    str(event_dict.get("event_id", uuid.uuid4())),
-                    str(event_dict["event_type"]),
-                    str(event_dict["aggregate_id"]),
-                    json.dumps(event_dict.get("payload", {}), default=str),
-                    str(event_dict.get("created_at", datetime.now(UTC).isoformat()))
-                ))
+            # 5. Record Event to event_ledger (audited state-transition event stream)
+            eff_event = event_dict or {
+                "event_id": str(uuid.uuid4()),
+                "event_type": "ORDER_FILLED" if fill_dict else "ORDER_EXECUTED",
+                "aggregate_id": order_dict.get("order_id", str(uuid.uuid4())),
+                "payload": {"order": order_dict, "fill": fill_dict},
+                "created_at": datetime.now(UTC).isoformat()
+            }
+            cursor.execute("""
+                INSERT INTO event_ledger (event_id, event_type, aggregate_id, payload_json, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                str(eff_event.get("event_id", uuid.uuid4())),
+                str(eff_event["event_type"]),
+                str(eff_event["aggregate_id"]),
+                json.dumps(eff_event.get("payload", {}), default=str),
+                str(eff_event.get("created_at", datetime.now(UTC).isoformat()))
+            ))
 
             # 6. Mark proposal executed
             if order_dict.get("proposal_id"):
@@ -668,30 +747,66 @@ class Database:
             ))
             conn.commit()
 
-    def get_positions(self) -> dict[str, dict[str, Decimal]]:
+    def get_positions(self) -> dict[str, dict[str, Any]]:
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT symbol, size, avg_entry_price FROM positions")
+            cursor.execute("SELECT symbol, size, avg_entry_price, stop_loss, take_profit FROM positions")
             rows = cursor.fetchall()
             return {
                 r["symbol"]: {
                     "size": Decimal(r["size"]),
-                    "avg_price": Decimal(r["avg_entry_price"])
+                    "avg_price": Decimal(r["avg_entry_price"]),
+                    "stop_loss": Decimal(r["stop_loss"]) if r["stop_loss"] else None,
+                    "take_profit": Decimal(r["take_profit"]) if r["take_profit"] else None
                 }
                 for r in rows
             }
 
-    def update_position(self, symbol: str, size: Decimal, avg_price: Decimal) -> None:
+    def update_position(
+        self,
+        symbol: str,
+        size: Decimal,
+        avg_price: Decimal,
+        stop_loss: Decimal | None = None,
+        take_profit: Decimal | None = None
+    ) -> None:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if size <= Decimal(0):
                 cursor.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
             else:
                 cursor.execute("""
-                    INSERT OR REPLACE INTO positions (symbol, size, avg_entry_price, updated_at)
-                    VALUES (?, ?, ?, ?)
-                """, (symbol, str(size), str(avg_price), datetime.now(UTC).isoformat()))
+                    INSERT OR REPLACE INTO positions (symbol, size, avg_entry_price, stop_loss, take_profit, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    symbol,
+                    str(size),
+                    str(avg_price),
+                    str(stop_loss) if stop_loss is not None else None,
+                    str(take_profit) if take_profit is not None else None,
+                    datetime.now(UTC).isoformat()
+                ))
             conn.commit()
+
+    def count_daily_orders(self, target_date_str: str | None = None) -> int:
+        """Count orders created on target UTC day (Review 3 N3)."""
+        d_str = target_date_str or datetime.now(UTC).strftime("%Y-%m-%d")
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM orders WHERE substr(created_at, 1, 10) = ?",
+                (d_str,)
+            )
+            row = cursor.fetchone()
+            return int(row["cnt"]) if row else 0
+
+    def get_daily_realized_loss(self, target_date_str: str | None = None) -> Decimal:
+        """Get cumulative net realized trading loss on target UTC day (Review 3 N3)."""
+        d_str = target_date_str or datetime.now(UTC).strftime("%Y-%m-%d")
+        reconstructed = self.reconstruct_ledger()
+        losses = reconstructed.get("daily_losses", {})
+        val = losses.get(d_str, Decimal("0.00"))
+        return Decimal(str(val))
 
     # --- Autonomy Demotion Persistence (H6) ---
     def record_demotion(self, incident_id: str, current_rung: str, reason: str) -> None:
@@ -723,16 +838,26 @@ class Database:
             """, (operator, datetime.now(UTC).isoformat(), incident_id))
             conn.commit()
 
-    # --- Reconciliation Ledger Rebuild (C5) ---
+    # --- Reconciliation Ledger Rebuild (C5 & Review 3 N1, N3) ---
     def reconstruct_ledger(self, initial_cash: Decimal = Decimal("10000.00")) -> dict[str, Any]:
-        """Reconstruct cash, equity, and positions from immutable fills table."""
+        """Reconstruct cash, equity, and positions from immutable fills table, preserving stops and computing realized P&L."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT symbol, side, price, size, fee FROM fills ORDER BY filled_at ASC")
+            cursor.execute("SELECT symbol, side, price, size, fee, filled_at FROM fills ORDER BY filled_at ASC")
             fills = cursor.fetchall()
+            cursor.execute("SELECT symbol, stop_loss, take_profit FROM positions")
+            pos_metadata = {
+                r["symbol"]: {
+                    "stop_loss": Decimal(r["stop_loss"]) if r["stop_loss"] else None,
+                    "take_profit": Decimal(r["take_profit"]) if r["take_profit"] else None
+                }
+                for r in cursor.fetchall()
+            }
 
         cash = initial_cash
-        positions: dict[str, dict[str, Decimal]] = {}
+        positions: dict[str, dict[str, Any]] = {}
+        daily_losses: dict[str, Decimal] = {}
+        trade_history: list[dict[str, Any]] = []
 
         for f in fills:
             price = Decimal(f["price"])
@@ -740,27 +865,71 @@ class Database:
             fee = Decimal(f["fee"])
             cost = price * size
             sym = f["symbol"]
+            filled_at_str = str(f["filled_at"])
+            fill_date = filled_at_str[:10]
+            realized_pnl = Decimal("0.00")
 
             if f["side"] == "BUY":
                 cash -= (cost + fee)
                 if sym in positions:
-                    cur_size = positions[sym]["size"]
-                    cur_avg = positions[sym]["avg_price"]
+                    cur_size = Decimal(str(positions[sym]["size"]))
+                    cur_avg = Decimal(str(positions[sym]["avg_price"]))
                     new_size = cur_size + size
                     new_avg = ((cur_avg * cur_size) + cost) / new_size
-                    positions[sym] = {"size": new_size, "avg_price": new_avg}
+                    positions[sym]["size"] = new_size
+                    positions[sym]["avg_price"] = new_avg
                 else:
-                    positions[sym] = {"size": size, "avg_price": price}
+                    positions[sym] = {
+                        "size": size,
+                        "avg_price": price,
+                        "stop_loss": pos_metadata.get(sym, {}).get("stop_loss"),
+                        "take_profit": pos_metadata.get(sym, {}).get("take_profit")
+                    }
             elif f["side"] == "SELL":
                 cash += (cost - fee)
                 if sym in positions:
-                    rem_size = positions[sym]["size"] - size
+                    cur_size = Decimal(str(positions[sym]["size"]))
+                    cur_avg = Decimal(str(positions[sym]["avg_price"]))
+                    realized_pnl = ((price - cur_avg) * size) - fee
+                    rem_size = cur_size - size
                     if rem_size <= Decimal(0):
                         del positions[sym]
                     else:
                         positions[sym]["size"] = rem_size
+                else:
+                    realized_pnl = -fee
+
+                if realized_pnl < Decimal(0):
+                    daily_losses[fill_date] = daily_losses.get(fill_date, Decimal("0.00")) + abs(realized_pnl)
+
+            # Standardize ts parsing
+            ts_str = filled_at_str.replace("Z", "+00:00")
+            try:
+                dt_obj = datetime.fromisoformat(ts_str)
+            except (ValueError, TypeError):
+                dt_obj = datetime.now(UTC)
+
+            trade_history.append({
+                "symbol": sym,
+                "side": f["side"],
+                "price": price,
+                "size": size,
+                "fee": fee,
+                "ts": dt_obj,
+                "realized_pnl": realized_pnl
+            })
+
+        # Ensure stops from positions table are preserved on active positions
+        for sym, pos_item in positions.items():
+            if sym in pos_metadata:
+                if pos_item.get("stop_loss") is None:
+                    pos_item["stop_loss"] = pos_metadata[sym].get("stop_loss")
+                if pos_item.get("take_profit") is None:
+                    pos_item["take_profit"] = pos_metadata[sym].get("take_profit")
 
         return {
             "cash": cash,
-            "positions": positions
+            "positions": positions,
+            "trade_history": trade_history,
+            "daily_losses": daily_losses
         }

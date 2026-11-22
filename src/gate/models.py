@@ -52,6 +52,8 @@ class GateContext(BaseModel):
     reconciliation_matched: bool = True
     approval_token: str | None = None
     approval_signature: str | None = None
+    approval_expires_at: str | None = None
+    approval_nonce: str | None = None
     proposal_id: uuid.UUID | None = None
 
 

@@ -3,8 +3,6 @@
 Built by [Abdul Hayy Khan](https://abdulhayykhan.dev).
 """
 
-import hashlib
-import hmac
 import uuid
 from decimal import Decimal
 from pathlib import Path
@@ -205,15 +203,22 @@ def test_proof_5_approval_forgery_fails_closed(tmp_path: Path, monkeypatch: pyte
     )
     assert res_wrong["passed"] is False
 
-    # Valid secret token -> Accept
-    res_valid_token = server.place_order(
+    # Raw secret token directly to place_order -> Reject (Review 3 N4 requirement)
+    res_raw_token = server.place_order(
         proposal_id=prop["proposal_id"],
         idempotency_key=prop["idempotency_key"],
         approval_token=secret
     )
+    assert res_raw_token["passed"] is False
+
+    # Valid secret token via approve_and_place_order -> Accept
+    res_valid_token = server.approve_and_place_order(
+        proposal_id=prop["proposal_id"],
+        approval_token=secret
+    )
     assert res_valid_token["passed"] is True
 
-    # 3. Cryptographic HMAC signature over canonical proposal hash
+    # 3. Cryptographic HMAC signature over canonical order parameters (N4)
     prop2 = server.submit_proposal({
         "symbol": "BTC/USDT",
         "side": "BUY",
@@ -224,13 +229,31 @@ def test_proof_5_approval_forgery_fails_closed(tmp_path: Path, monkeypatch: pyte
         "rationale_id": "TEST_APP_2"
     })
     p2_id = prop2["proposal_id"]
-    canonical_msg = f"{p2_id}:BTC/USDT:BUY:0.001:30000.00:29000.00"
-    valid_sig = hmac.new(secret.encode(), canonical_msg.encode(), hashlib.sha256).hexdigest()
+    from datetime import UTC, datetime, timedelta
+
+    from src.gate.evaluator import create_order_approval_signature
+    now = datetime.now(UTC)
+    expires_at = (now + timedelta(hours=1)).isoformat()
+    nonce = uuid.uuid4().hex
+    valid_sig = create_order_approval_signature(
+        secret=secret,
+        symbol="BTC/USDT",
+        side="BUY",
+        order_type="LIMIT",
+        size="0.001",
+        price="30000.00",
+        stop_loss="29000.00",
+        take_profit=None,
+        expires_at=expires_at,
+        nonce=nonce
+    )
 
     res_valid_sig = server.place_order(
         proposal_id=p2_id,
         idempotency_key=prop2["idempotency_key"],
-        approval_signature=valid_sig
+        approval_signature=valid_sig,
+        approval_expires_at=expires_at,
+        approval_nonce=nonce
     )
     assert res_valid_sig["passed"] is True, f"B3 Fix: Valid HMAC signature must pass: {res_valid_sig.get('reasons')}"
 

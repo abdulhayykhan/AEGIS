@@ -130,13 +130,45 @@ class TelegramCommandHandler:
         except ValueError:
             return f"❌ Invalid UUID format: `{proposal_id_str}`"
 
-        owner_token = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
-        if not owner_token:
-            return "❌ *APPROVAL REJECTED*: AEGIS_OWNER_SECRET is not configured on this server."
+        owner_secret = (
+            os.environ.get("AEGIS_APPROVAL_SECRET")
+            or os.environ.get("AEGIS_OWNER_SECRET")
+            or os.environ.get("AEGIS_OWNER_TOKEN")
+        )
+        if not owner_secret:
+            return "❌ *APPROVAL REJECTED*: AEGIS_APPROVAL_SECRET is not configured on this server."
+
+        stored = self.server.proposals.get(p_id)
+        if not stored:
+            return f"❌ Proposal ID `{p_id}` not found in database."
+
+        from datetime import UTC, datetime, timedelta
+
+        from src.gate.evaluator import create_order_approval_signature
+        now = datetime.now(UTC)
+        expires_at = (now + timedelta(hours=1)).isoformat()
+        nonce = uuid.uuid4().hex
+
+        prop = stored.proposal
+        sig = create_order_approval_signature(
+            secret=owner_secret,
+            symbol=prop.symbol,
+            side=prop.side.value,
+            order_type=prop.order_type.value,
+            size=prop.size,
+            price=prop.price,
+            stop_loss=prop.stop_loss,
+            take_profit=prop.take_profit,
+            expires_at=expires_at,
+            nonce=nonce
+        )
 
         res = self.server.approve_and_place_order(
             proposal_id=p_id,
-            approval_token=owner_token
+            approval_signature=sig,
+            approval_expires_at=expires_at,
+            approval_nonce=nonce,
+            current_ts=now
         )
         if res.get("passed"):
             order_data = res.get("order", {})
@@ -145,22 +177,34 @@ class TelegramCommandHandler:
             reasons = "; ".join(res.get("reasons", ["Rejected by Risk Gate"]))
             return f"❌ *APPROVAL REJECTED BY RISK GATE*\n{reasons}"
 
-    def poll_updates(self, bot_token: str | None = None, offset: int = 0) -> int:
-        """Fetch pending Telegram messages and dispatch commands, returning new offset."""
+    def poll_updates(self, bot_token: str | None = None, offset: int | None = None) -> int:
+        """Fetch pending Telegram messages, dispatch commands, and persist update offset."""
         import json
         import urllib.request
+        from pathlib import Path
+
+        offset_file = Path("data/telegram_offset.txt")
+        current_offset = offset
+        if current_offset is None:
+            if offset_file.exists():
+                try:
+                    current_offset = int(offset_file.read_text(encoding="utf-8").strip())
+                except ValueError:
+                    current_offset = 0
+            else:
+                current_offset = 0
 
         token = bot_token or os.environ.get("AEGIS_TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
         if not token:
-            return offset
-        url = f"https://api.telegram.org/bot{token}/getUpdates?offset={offset}&timeout=5"
+            return current_offset
+        url = f"https://api.telegram.org/bot{token}/getUpdates?offset={current_offset}&timeout=5"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "AEGIS-TelegramBot/1.0"})
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 for item in data.get("result", []):
-                    update_id = item.get("update_id", offset)
-                    offset = max(offset, update_id + 1)
+                    update_id = item.get("update_id", current_offset)
+                    current_offset = max(current_offset, update_id + 1)
                     msg = item.get("message", {})
                     chat_id = str(msg.get("chat", {}).get("id", ""))
                     sender_id = str(msg.get("from", {}).get("id", ""))
@@ -171,6 +215,9 @@ class TelegramCommandHandler:
                         send_payload = json.dumps({"chat_id": chat_id, "text": reply}).encode("utf-8")
                         send_req = urllib.request.Request(send_url, data=send_payload, headers={"Content-Type": "application/json"})
                         urllib.request.urlopen(send_req, timeout=5)
+            # Persist offset
+            offset_file.parent.mkdir(parents=True, exist_ok=True)
+            offset_file.write_text(str(current_offset), encoding="utf-8")
         except Exception:  # noqa: BLE001, S110
             pass
-        return offset
+        return current_offset
