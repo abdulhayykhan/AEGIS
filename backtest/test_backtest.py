@@ -35,7 +35,7 @@ def generate_sample_bars(n: int = 100, trend: str = "up") -> list[Bar]:
 
 
 def test_backtest_strictly_prohibits_lookahead() -> None:
-    """Verify that decisions at bar T use only bars up to T."""
+    """Verify that decisions at bar T use only bars up to T by mutating future bars."""
     bars = generate_sample_bars(n=60, trend="up")
     config = BacktestConfig(
         initial_capital=Decimal("10000.0"),
@@ -44,13 +44,29 @@ def test_backtest_strictly_prohibits_lookahead() -> None:
     )
     engine = BacktestEngine(config=config)
 
-    # In engine run, record the highest bar timestamp available at each decision point
-    result = engine.run(bars)
-    for decision in result.decision_history:
-        assert decision.decision_bar_ts <= decision.current_bar_ts, (
-            f"Lookahead detected: decision used bar ts {decision.decision_bar_ts} "
-            f"which is beyond current bar {decision.current_bar_ts}"
+    # Base run
+    res_base = engine.run(bars)
+    signals_base = [d.signal for d in res_base.decision_history[:30]]
+
+    # Mutate future bars (from index 30 onwards, inject massive volatility and price crashes)
+    mutated_bars = list(bars[:30])
+    for b in bars[30:]:
+        mutated_bars.append(
+            Bar(
+                ts=b.ts,
+                open=b.open * Decimal("0.10"),
+                high=b.high * Decimal("5.00"),
+                low=b.low * Decimal("0.01"),
+                close=b.close * Decimal("0.05"),
+                volume=b.volume * Decimal("100.0")
+            )
         )
+
+    res_mutated = engine.run(mutated_bars)
+    signals_mutated = [d.signal for d in res_mutated.decision_history[:30]]
+
+    # Signals at bar T must be strictly invariant to any future bar mutations
+    assert signals_base == signals_mutated, "Lookahead bias detected: mutating future bars altered prior decisions!"
 
 
 def test_backtest_deducts_fees_and_slippage() -> None:

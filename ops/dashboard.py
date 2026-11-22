@@ -4,6 +4,7 @@ from pydantic import BaseModel, ConfigDict
 
 from ops.alerts import AlertService
 from src.connector.server import AegisConnectorServer
+from src.gate.reconcile import AccountState, PositionState, reconcile_states
 
 
 class DashboardMetrics(BaseModel):
@@ -39,6 +40,7 @@ class AegisDashboard:
     def get_metrics(self) -> DashboardMetrics:
         acc = self.connector.get_account()
         run_state = self.connector.get_run_state()
+        gate_config = self.connector.gate.config
 
         equity = Decimal(str(acc["equity"]))
         cash = Decimal(str(acc["cash"]))
@@ -47,8 +49,27 @@ class AegisDashboard:
 
         dd_pct = ((peak - equity) / peak * Decimal("100.00")) if peak > Decimal(0) and equity < peak else Decimal("0.00")
         daily_loss = self.connector.daily_realized_loss
-        daily_budget = Decimal("200.00")
+        daily_budget = equity * gate_config.max_daily_loss_pct
         loss_pct = (daily_loss / daily_budget * Decimal("100.00")) if daily_budget > Decimal(0) else Decimal("0.00")
+
+        # Reconstruct real reconciliation status between DB ledger and broker
+        try:
+            ledger = self.connector.db.reconstruct_ledger()
+            mark_prices = self.connector.get_all_mark_prices()
+            db_positions = {
+                sym: PositionState(symbol=sym, size=p["size"], avg_price=p["avg_price"])
+                for sym, p in ledger["positions"].items()
+            }
+            notional = sum((p.size * mark_prices.get(sym, p.avg_price) for sym, p in db_positions.items()), Decimal(0))
+            db_state = AccountState(equity=ledger["cash"] + notional, cash=ledger["cash"], positions=db_positions)
+            broker_positions = {
+                sym: PositionState(symbol=sym, size=Decimal(str(p["size"])), avg_price=Decimal(str(p.get("avg_price", "0.00"))))
+                for sym, p in acc["positions"].items()
+            }
+            broker_state = AccountState(equity=equity, cash=cash, positions=broker_positions)
+            rec_match = reconcile_states(db_state, broker_state).match
+        except (KeyError, ValueError, TypeError):
+            rec_match = False
 
         return DashboardMetrics(
             equity=equity,
@@ -60,11 +81,11 @@ class AegisDashboard:
             daily_loss_pct_used=loss_pct,
             peak_equity=peak,
             current_drawdown_pct=dd_pct,
-            max_drawdown_limit_pct=Decimal("10.00"),
+            max_drawdown_limit_pct=gate_config.max_drawdown_pct * Decimal("100.00"),
             orders_today_count=self.connector.orders_today_count,
-            max_orders_per_day=10,
+            max_orders_per_day=gate_config.max_orders_per_day,
             kill_switch_active=run_state["kill_switch_active"],
-            reconciliation_matched=True
+            reconciliation_matched=rec_match
         )
 
     def render_markdown(self) -> str:

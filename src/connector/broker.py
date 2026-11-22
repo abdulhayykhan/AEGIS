@@ -76,7 +76,8 @@ class PaperBroker:
         order_type: OrderType,
         price: Decimal,
         size: Decimal,
-        mark_price: Decimal
+        mark_price: Decimal,
+        fee_rate: Decimal = Decimal("0.0010")  # 0.10% taker fee per PRD Section 11
     ) -> BrokerOrder:
         order_id = uuid.uuid4()
         now = datetime.now(UTC)
@@ -87,9 +88,10 @@ class PaperBroker:
 
         if status == "FILLED":
             cost = price * size
-            fee = Decimal("0.00")
+            fee = cost * fee_rate
+
             if side == OrderSide.BUY:
-                self.cash -= cost
+                self.cash -= (cost + fee)
                 existing_pos = self.positions.get(symbol)
                 if existing_pos:
                     new_size = existing_pos.size + size
@@ -98,17 +100,21 @@ class PaperBroker:
                 else:
                     self.positions[symbol] = Position(symbol=symbol, size=size, avg_price=price)
             elif side == OrderSide.SELL:
-                self.cash += cost
                 existing_pos = self.positions.get(symbol)
-                if existing_pos:
-                    closed_size = min(existing_pos.size, size)
-                    trade_pnl = (price - existing_pos.avg_price) * closed_size
-                    self.realized_pnl += trade_pnl
-                    rem_size = existing_pos.size - size
-                    if rem_size <= Decimal(0):
-                        self.positions.pop(symbol, None)
-                    else:
-                        self.positions[symbol] = Position(symbol=symbol, size=rem_size, avg_price=existing_pos.avg_price)
+                if not existing_pos or existing_pos.size < size:
+                    held = existing_pos.size if existing_pos else Decimal(0)
+                    raise ValueError(
+                        f"Cannot sell without position: held {held} of '{symbol}', attempted to sell {size}. Shorting disabled."
+                    )
+                self.cash += (cost - fee)
+                closed_size = size
+                trade_pnl = (price - existing_pos.avg_price) * closed_size
+                self.realized_pnl += trade_pnl
+                rem_size = existing_pos.size - size
+                if rem_size <= Decimal(0):
+                    self.positions.pop(symbol, None)
+                else:
+                    self.positions[symbol] = Position(symbol=symbol, size=rem_size, avg_price=existing_pos.avg_price)
 
             self.total_fees_paid += fee
             self.trade_history.append({
@@ -134,6 +140,24 @@ class PaperBroker:
         )
         self.orders[order_id] = order
         return order
+
+    def cancel_all_open_orders(self) -> int:
+        """Cancel all active SUBMITTED orders (e.g. on kill switch engagement)."""
+        count = 0
+        for o_id, order in list(self.orders.items()):
+            if order.status == "SUBMITTED":
+                self.orders[o_id] = BrokerOrder(
+                    order_id=order.order_id,
+                    symbol=order.symbol,
+                    side=order.side,
+                    order_type=order.order_type,
+                    price=order.price,
+                    size=order.size,
+                    status="CANCELLED",
+                    created_at=order.created_at
+                )
+                count += 1
+        return count
 
     def cancel_order(self, order_id: uuid.UUID) -> bool:
         if order_id in self.orders and self.orders[order_id].status == "SUBMITTED":

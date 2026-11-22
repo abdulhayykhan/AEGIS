@@ -1,12 +1,16 @@
 # AEGIS Phase 7 Small Live with Approval Verification Report
 
+> [!NOTE] Harness Simulation Notice
+> This document records the empirical results of the automated 28-day lifecycle harness test (`ops/run_live_approval_simulation.py`), validating that HMAC owner approval verification, slippage tracking, and single-order gating execute without errors. Real capital deployment requires completing this period against live venue APIs with real liquidity.
+
 ## 1. Executive Summary
-- **Evaluation Period**: 28 Days (4 Weeks)
+- **Harness Evaluation Run**: 28 Simulated Daily Cycles (4 Weeks)
 - **Risk Gate Violations**: 0 (Requirement: Exactly 0)
 - **Daily Reconciliation Match Rate**: 100.0% (28/28)
 - **Orders Approved & Executed**: 1
 - **Max Observed Slippage**: 0.0000% (Assumption: <= 0.0500%)
 - **Final Account Equity**: $10000.00000 USDT
+- **Status**: **HARNESS TEST PASSED** (Awaiting real venue deployment)
 
 ## 2. Exit Criteria Evidence Matrix (PRD Section 17)
 | Exit Criterion | Required Target | Observed Result | Status |
