@@ -64,7 +64,7 @@ class AgentLoop:
                 status="STOPPED",
                 turns_executed=turns_executed,
                 cost_usd=accumulated_cost,
-                stop_reason="KILL_SWITCH_ACTIVE",
+                stop_reason="Emergency kill switch active",
                 proposals_generated_count=0,
                 orders_placed_count=0,
                 injection_detected=False,
