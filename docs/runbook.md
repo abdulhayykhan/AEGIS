@@ -1,6 +1,6 @@
 # AEGIS Incident & Operations Runbook
 
-> **Operational Guidelines for Abdul Hayy**  
+> **Operational Guidelines by [Abdul Hayy Khan](https://abdulhayykhan.dev)**  
 > **Framework**: *The AI Agent Factory (Panaversity)*, Ch. 11.1, 11.3, 15.2, 15.4
 
 ---
@@ -74,7 +74,7 @@ To safely resume operations after an incident or halt:
    ```
 3. Clear the kill switch state via owner credentials:
    ```bash
-   python -m src.gate.kill_switch --disengage --owner "Abdul Hayy"
+   python -m src.gate.kill_switch --disengage --owner "Abdul Hayy Khan"
    ```
 4. Run a single manual check in Recommend-Only mode:
    ```bash

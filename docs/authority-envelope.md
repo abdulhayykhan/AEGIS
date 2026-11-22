@@ -34,9 +34,9 @@ Autonomy in AEGIS means **no per-trade human approval bottlenecks**, NOT an abse
    - The AI cannot inspect, bypass, or mutate these limits.
 2. **Automated Self-Halting**:
    - The system immediately halts on: daily loss breach (2%), drawdown breach (8%), stale market data (> 2 bars old), reconciliation mismatch between Postgres and broker, or runaway cost.
-   - The agent cannot clear a halt or resume trading. Only Abdul Hayy can clear a halt after reviewing the incident log.
+   - The agent cannot clear a halt or resume trading. Only [Abdul Hayy Khan](https://abdulhayykhan.dev) can clear a halt after reviewing the incident log.
 3. **Supervision by Exception**:
-   - Abdul Hayy supervises through high-signal Telegram alerts, daily summary reports, and heartbeat checks rather than tedious manual approvals.
+   - [Abdul Hayy Khan](https://abdulhayykhan.dev) supervises through high-signal Telegram alerts, daily summary reports, and heartbeat checks rather than tedious manual approvals.
 
 ---
 
@@ -58,5 +58,5 @@ Promotion from one rung to the next is strictly gated by the exit criteria outli
 
 - **Active Phase**: Phase 0 (Specification)
 - **Active Rung for Orders**: **NO EXECUTION** (Phase 0)
-- **Owner Signature**: `[PENDING OWNER SIGNATURE: Abdul Hayy]`
+- **Owner Signature**: `[PENDING OWNER SIGNATURE: [Abdul Hayy Khan](https://abdulhayykhan.dev)]`
 - **Date**: 2026-11-22

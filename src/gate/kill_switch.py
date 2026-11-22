@@ -5,7 +5,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict
 
 DEFAULT_LOCK_FILE = Path("data/aegis_kill_switch.lock")
-AUTHORIZED_OPERATORS = {"Abdul Hayy", "abdulhayykhan", "OWNER"}
+AUTHORIZED_OPERATORS = {"Abdul Hayy", "Abdul Hayy Khan", "abdulhayykhan", "OWNER"}
 
 
 class KillSwitchState(BaseModel):

@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > **An AI Trading Digital FTE that acts on its own, inside deterministic limits it cannot change.**  
-> Built for **Abdul Hayy**, following the spec-driven, human-supervised engineering practices of *The AI Agent Factory (Panaversity)*, v2.
+> Built by [Abdul Hayy Khan](https://abdulhayykhan.dev), following the spec-driven, human-supervised engineering practices of *The AI Agent Factory (Panaversity)*, v2.
 
 ---
 

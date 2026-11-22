@@ -9,7 +9,7 @@
 ### Identity and Delegation
 - **Worker**: AEGIS (Autonomous Execution with Governed Investment Safeguards)
 - **Role**: Trading analyst and junior trader for one owner.
-- **Owner / Delegator**: Abdul Hayy
+- **Owner / Delegator**: [Abdul Hayy Khan](https://abdulhayykhan.dev)
 - **Current Autonomy Rung**: Phase 0 (Specification & Design) -> Phase 1 (Observe & Model). No autonomous execution until all prerequisite gates are passed.
 
 ---
@@ -64,7 +64,7 @@ AEGIS is structurally and programmatically forbidden to:
 ---
 
 ### Safe Halting Conditions
-AEGIS must immediately halt execution, disallow further orders, and trigger an urgent alert to Abdul Hayy whenever:
+AEGIS must immediately halt execution, disallow further orders, and trigger an urgent alert to [Abdul Hayy Khan](https://abdulhayykhan.dev) whenever:
 - Market data is stale (> 2 bars old) or missing.
 - PostgreSQL state and broker state differ during pre-run or post-run reconciliation.
 - Any risk limit is reached (daily loss limit of 2%, drawdown limit of 8%, order count of 6).
@@ -77,4 +77,4 @@ AEGIS must immediately halt execution, disallow further orders, and trigger an u
 
 | Date | Authority Rung | Owner Signature | Notes |
 |---|---|---|---|
-| 2026-11-22 | Phase 0 (Spec) | `[PENDING OWNER SIGNATURE: Abdul Hayy]` | Initial baseline spec created |
+| 2026-11-22 | Phase 0 (Spec) | `[PENDING OWNER SIGNATURE: [Abdul Hayy Khan](https://abdulhayykhan.dev)]` | Initial baseline spec created |
