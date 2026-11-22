@@ -58,33 +58,36 @@ def generate_weekly_report(db: Database) -> WeeklyPerformanceReport:
         cursor.execute("SELECT symbol, side, price, size, fee, filled_at FROM fills ORDER BY filled_at ASC")
         fills = cursor.fetchall()
 
-    buys: list[dict[str, Any]] = []
-    sells: list[dict[str, Any]] = []
+    by_symbol: dict[str, dict[str, list[dict[str, Any]]]] = {}
     total_fees = Decimal("0.00")
 
     for f in fills:
         f_dict = dict(f)
         total_fees += Decimal(str(f_dict.get("fee", "0.00")))
+        sym = f_dict["symbol"]
+        if sym not in by_symbol:
+            by_symbol[sym] = {"buys": [], "sells": []}
         if f_dict["side"] == "BUY":
-            buys.append(f_dict)
+            by_symbol[sym]["buys"].append(f_dict)
         elif f_dict["side"] == "SELL":
-            sells.append(f_dict)
+            by_symbol[sym]["sells"].append(f_dict)
 
     gross_profit = Decimal("0.00")
     gross_loss = Decimal("0.00")
     winning_trades = 0
     losing_trades = 0
 
-    # Match paired buys and sells
-    for b, s in zip(buys, sells):
-        size = min(Decimal(str(b["size"])), Decimal(str(s["size"])))
-        pnl = (Decimal(str(s["price"])) - Decimal(str(b["price"]))) * size
-        if pnl > Decimal(0):
-            gross_profit += pnl
-            winning_trades += 1
-        elif pnl < Decimal(0):
-            gross_loss += abs(pnl)
-            losing_trades += 1
+    # Match paired buys and sells per symbol (fixes multi-asset pairing bug - Review 2 Sec 4.6)
+    for sym, trades in by_symbol.items():
+        for b, s in zip(trades["buys"], trades["sells"]):
+            size = min(Decimal(str(b["size"])), Decimal(str(s["size"])))
+            pnl = (Decimal(str(s["price"])) - Decimal(str(b["price"]))) * size
+            if pnl > Decimal(0):
+                gross_profit += pnl
+                winning_trades += 1
+            elif pnl < Decimal(0):
+                gross_loss += abs(pnl)
+                losing_trades += 1
 
     total_paired = winning_trades + losing_trades
     win_rate = (Decimal(str(winning_trades)) / Decimal(str(total_paired)) * Decimal("100.0")) if total_paired > 0 else Decimal("0.0")

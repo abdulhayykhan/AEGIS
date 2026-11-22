@@ -1,9 +1,11 @@
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
 from src.connector.server import AegisConnectorServer
 from src.gate.models import OrderSide, OrderType
+from src.storage.db import Database
 
 FORBIDDEN_TOOLS = ["withdraw", "transfer", "set_limit", "set_mode", "execute_raw"]
 REQUIRED_TOOLS = [
@@ -19,8 +21,9 @@ REQUIRED_TOOLS = [
 
 
 @pytest.fixture
-def connector() -> AegisConnectorServer:
-    server = AegisConnectorServer(mode="PAPER")
+def connector(tmp_path: Path) -> AegisConnectorServer:
+    db = Database(db_path=tmp_path / "contract_test.db")
+    server = AegisConnectorServer(mode="PAPER", db=db)
     server.seed_mock_data()
     return server
 

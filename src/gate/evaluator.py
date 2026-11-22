@@ -190,8 +190,8 @@ class RiskGate:
                     f"Max total exposure exceeded: {new_total_exposure:.2f} > {max_total_exposure:.2f} USDT (50%)."
                 )
 
-        # Max orders per 24h window
-        if context.orders_today_count >= self.config.max_orders_per_day:
+        # Max orders per 24h window (Exempt reduce-only exit orders - B6 & Proof 3)
+        if not is_reduce_only and context.orders_today_count >= self.config.max_orders_per_day:
             reasons.append(
                 f"Daily order limit reached ({context.orders_today_count}/{self.config.max_orders_per_day})."
             )
@@ -201,6 +201,13 @@ class RiskGate:
     def _check_per_trade_risk(self, proposal: OrderProposal, context: GateContext) -> list[str]:
         reasons: list[str] = []
         equity = context.account_equity
+
+        held_position = context.open_positions.get(proposal.symbol, Decimal(0))
+        is_reduce_only = (
+            proposal.reduce_only
+            or context.reduce_only
+            or (proposal.side == OrderSide.SELL and held_position > Decimal(0))
+        )
 
         # C8 & Proof D: Validate stop loss and take profit direction per side
         if proposal.side == OrderSide.BUY:
@@ -224,8 +231,8 @@ class RiskGate:
                 )
             stop_distance = proposal.stop_loss - proposal.price
 
-        # Per-trade risk <= 1% equity
-        if stop_distance > Decimal(0):
+        # Per-trade risk <= 1% equity (Exempt reduce-only exit orders - B6 & Proof 3)
+        if not is_reduce_only and stop_distance > Decimal(0):
             monetary_risk = stop_distance * proposal.size
             max_trade_risk = equity * self.config.max_risk_pct
 
@@ -252,28 +259,37 @@ class RiskGate:
 
     def _check_approvals(self, proposal: OrderProposal, context: GateContext) -> list[str]:
         reasons: list[str] = []
-        # C3: Cryptographic / HMAC owner approval verification for LIVE_WITH_APPROVAL
+        # C3 & B3: Cryptographic / HMAC owner approval verification for LIVE_WITH_APPROVAL
         if context.mode == "LIVE_WITH_APPROVAL":
-            expected_token = os.environ.get("AEGIS_OWNER_TOKEN", "aegis_owner_secret_token_live_phase7")
-            valid_static_tokens = {
-                expected_token,
-                "OWNER_ABDUL_HAYY_SIGNATURE",
-                "OWNER_ABDUL_HAYY_KHAN_SIGNATURE",
-            }
+            expected_token = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
+            if not expected_token:
+                reasons.append(
+                    "AEGIS_OWNER_SECRET environment variable is not configured; LIVE_WITH_APPROVAL orders cannot be authorized."
+                )
+                return reasons
+
             token = context.approval_token
             sig = context.approval_signature
             prop_id = context.proposal_id or proposal.proposal_id
 
             valid = False
-            if token and (token in valid_static_tokens or hmac.compare_digest(token, expected_token)):
+            # Option 1: Direct owner token secret match (constant time compare)
+            if token and hmac.compare_digest(token, expected_token):
                 valid = True
+            # Option 2: HMAC signature over canonical proposal hash or proposal_id
             elif sig and prop_id:
+                canonical_msg = f"{prop_id}:{proposal.symbol}:{proposal.side.value}:{proposal.size}:{proposal.price}:{proposal.stop_loss}"
                 computed_sig = hmac.new(
+                    expected_token.encode("utf-8"),
+                    canonical_msg.encode("utf-8"),
+                    hashlib.sha256
+                ).hexdigest()
+                simple_sig = hmac.new(
                     expected_token.encode("utf-8"),
                     str(prop_id).encode("utf-8"),
                     hashlib.sha256
                 ).hexdigest()
-                if hmac.compare_digest(sig, computed_sig):
+                if hmac.compare_digest(sig, computed_sig) or hmac.compare_digest(sig, simple_sig):
                     valid = True
 
             if not valid:

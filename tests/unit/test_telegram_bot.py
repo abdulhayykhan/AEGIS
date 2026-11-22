@@ -1,6 +1,11 @@
 
+from pathlib import Path
+
+import pytest
+
 from ops.telegram_bot import TelegramCommandHandler
 from src.connector.server import AegisConnectorServer
+from src.gate.kill_switch import StandaloneKillSwitch
 
 
 def test_telegram_unauthorized_user_blocked() -> None:
@@ -24,19 +29,26 @@ def test_telegram_status_command() -> None:
     assert "$10000.00" in response
 
 
-def test_telegram_emergency_kill_command() -> None:
+def test_telegram_emergency_kill_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "tg_test_secret_123"
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
     server = AegisConnectorServer(mode="PAPER")
-    handler = TelegramCommandHandler(server=server, authorized_chat_id="12345678")
+    lock_file = tmp_path / "tg_kill.lock"
+    ks = StandaloneKillSwitch(lock_file_path=lock_file)
+    handler = TelegramCommandHandler(server=server, authorized_chat_id="12345678", kill_switch=ks)
 
     response = handler.handle_command(user_chat_id="12345678", command_text="/kill Emergency stop via chat")
     assert "EMERGENCY KILL SWITCH ENGAGED" in response
     assert handler.kill_switch.is_engaged() is True
 
     # Cleanup kill switch
-    handler.kill_switch.disengage(operator="Abdul Hayy Khan")
+    handler.kill_switch.disengage(operator="Abdul Hayy Khan", token=secret)
+    assert handler.kill_switch.is_engaged() is False
 
 
-def test_telegram_approve_proposal_command() -> None:
+def test_telegram_approve_proposal_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    secret = "tg_owner_secret_456"
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
     server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL")
     server.seed_mock_data()
     handler = TelegramCommandHandler(server=server, authorized_chat_id="12345678")

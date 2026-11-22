@@ -2,13 +2,16 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from src.agent.loop import AgentConfig, AgentLoop
 from src.connector.server import AegisConnectorServer
+from src.storage.db import Database
 
 
-def test_live_with_approval_mode_drafts_order_without_executing() -> None:
+def test_live_with_approval_mode_drafts_order_without_executing(tmp_path: Path) -> None:
     """Verify that in LIVE_WITH_APPROVAL mode, orders are drafted and held pending owner approval."""
-    server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL")
+    server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL", db=Database(db_path=tmp_path / "test.db"))
     server.seed_mock_data()
 
     config = AgentConfig(
@@ -30,9 +33,11 @@ def test_live_with_approval_mode_drafts_order_without_executing() -> None:
     assert pending_drafts[0]["status"] == "PENDING_APPROVAL"
 
 
-def test_owner_approval_routes_through_risk_gate_to_broker() -> None:
+def test_owner_approval_routes_through_risk_gate_to_broker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verify that owner approval with valid token safely executes through the Risk Gate."""
-    server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL")
+    secret = "test_live_owner_token_safe_99"
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
+    server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL", db=Database(db_path=tmp_path / "test.db"))
     server.seed_mock_data()
 
     # Draft a proposal directly
@@ -57,15 +62,17 @@ def test_owner_approval_routes_through_risk_gate_to_broker() -> None:
     # 2. Accept execution with valid owner signature
     valid_res = server.approve_and_place_order(
         proposal_id=proposal_id,
-        approval_token="OWNER_ABDUL_HAYY_SIGNATURE"
+        approval_token=secret
     )
     assert valid_res["passed"] is True
     assert valid_res["order"]["status"] in ("FILLED", "SUBMITTED")
 
 
-def test_slippage_monitoring_within_assumptions() -> None:
+def test_slippage_monitoring_within_assumptions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Verify slippage monitoring compares execution fill against expected mark price."""
-    server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL")
+    secret = "test_live_owner_token_safe_99"
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
+    server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL", db=Database(db_path=tmp_path / "test.db"))
     server.seed_mock_data()
 
     prop_payload = {
@@ -83,7 +90,7 @@ def test_slippage_monitoring_within_assumptions() -> None:
 
     res = server.approve_and_place_order(
         proposal_id=proposal_id,
-        approval_token="OWNER_ABDUL_HAYY_SIGNATURE"
+        approval_token=secret
     )
     assert res["passed"] is True
     # Verify slippage calculation is tracked
@@ -94,7 +101,8 @@ def test_slippage_monitoring_within_assumptions() -> None:
 def test_live_approval_simulation_short_run(tmp_path: Path) -> None:
     from ops.run_live_approval_simulation import run_live_approval_simulation
     report_file = tmp_path / "live_sim_report.md"
-    res = run_live_approval_simulation(num_days=3, output_report_path=report_file)
+    db_file = tmp_path / "live_sim.db"
+    res = run_live_approval_simulation(num_days=3, output_report_path=report_file, db_path=db_file)
 
     assert res["num_days"] == 3
     assert res["successful_days"] == 3

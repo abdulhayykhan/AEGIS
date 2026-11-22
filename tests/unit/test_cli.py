@@ -24,6 +24,8 @@ def test_cli_run_cycle(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFi
 
 
 def test_cli_kill_switch(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    test_secret = "test_cli_secret_key_123"
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", test_secret)
     test_lock = tmp_path / "test_kill.lock"
     # Engage
     monkeypatch.setattr(sys, "argv", ["aegis", "kill", "--reason", "Test Emergency", "--owner", "Abdul Hayy Khan", "--lock-path", str(test_lock)])
@@ -34,7 +36,7 @@ def test_cli_kill_switch(monkeypatch: pytest.MonkeyPatch, capsys: pytest.Capture
     assert test_lock.exists()
 
     # Disengage
-    monkeypatch.setattr(sys, "argv", ["aegis", "kill", "--disengage", "--owner", "Abdul Hayy Khan", "--lock-path", str(test_lock)])
+    monkeypatch.setattr(sys, "argv", ["aegis", "kill", "--disengage", "--owner", "Abdul Hayy Khan", "--token", test_secret, "--lock-path", str(test_lock)])
     exit_code = main()
     assert exit_code == 0
     captured = capsys.readouterr()

@@ -46,39 +46,77 @@ class AegisConnectorServer:
         self.broker = broker or PaperBroker(initial_cash=Decimal("10000.00"))
         self.gate = RiskGate(config=gate_config or GateConfig())
         
-        # Restore open positions from persistent storage
+        # 1. Restore positions and protective stops from persistent storage
         persisted_positions = self.db.get_positions()
         for sym, pos_data in persisted_positions.items():
             self.broker.positions[sym] = Position(
                 symbol=sym,
                 size=pos_data["size"],
-                avg_price=pos_data["avg_price"]
+                avg_price=pos_data["avg_price"],
+                stop_loss=pos_data.get("stop_loss"),
+                take_profit=pos_data.get("take_profit")
             )
+
+        # 2. Reconstruct cash, trade history, and fees via ledger reconstruction (B1 & Proof 1)
+        ledger = self.db.reconstruct_ledger(initial_cash=getattr(self.broker, "initial_cash", Decimal("10000.00")))
+        if ledger.get("cash") is not None:
+            self.broker.cash = ledger["cash"]
+
+        db_fills = self.db.get_fills()
+        if db_fills:
+            self.broker.trade_history = [
+                {
+                    "trade_id": str(f.get("order_id", uuid.uuid4())),
+                    "order_id": str(f.get("order_id", uuid.uuid4())),
+                    "symbol": f["symbol"],
+                    "side": f["side"],
+                    "price": str(f["price"]),
+                    "size": str(f["size"]),
+                    "fee": str(f["fee"]),
+                    "realized_pnl": "0.00",
+                    "ts": f["filled_at"]
+                }
+                for f in db_fills
+            ]
+            self.broker.total_fees_paid = sum((Decimal(str(f["fee"])) for f in db_fills), Decimal("0.00"))
 
         # In-memory storage for proposals and state simulation
         self.proposals: dict[uuid.UUID, StoredProposal] = {}
         self.used_idempotency_keys: set[uuid.UUID] = set()
         self.executed_proposal_ids: set[uuid.UUID] = set()
+
+        # 3. Restore idempotency keys and executed proposal IDs from DB
+        for p in self.db.get_proposals():
+            if p.get("idempotency_key"):
+                try:
+                    self.used_idempotency_keys.add(uuid.UUID(str(p["idempotency_key"])))
+                except ValueError:
+                    pass
+        for o in self.db.get_orders():
+            if o.get("proposal_id"):
+                try:
+                    self.executed_proposal_ids.add(uuid.UUID(str(o["proposal_id"])))
+                except ValueError:
+                    pass
+
         self.bars_db: dict[str, list[dict[str, Any]]] = {}
         self.news_db: list[dict[str, Any]] = []
         self.orders_today_count = 0
         self.last_order_date = datetime.now(UTC).date()
         self.daily_realized_loss = Decimal("0.00")
-        self.peak_equity = Decimal("10000.00")
+        self.peak_equity = self.db.get_max_equity(default=self.broker.cash)
+        latest_snap = self.db.get_latest_equity_snapshot()
+        if latest_snap:
+            self.peak_equity = max(self.peak_equity, Decimal(str(latest_snap["equity"])))
         self.kill_switch_active = False
         self.allowed_instruments = {"BTC/USDT", "ETH/USDT", "SOL/USDT"}
 
     def get_mark_price(self, symbol: str) -> Decimal:
-        """Retrieve unified mark price from latest bars or default benchmark."""
-        default_prices = {
-            "BTC/USDT": Decimal("30000.00"),
-            "ETH/USDT": Decimal("2000.00"),
-            "SOL/USDT": Decimal("100.00"),
-        }
+        """Retrieve unified mark price from latest bars. Fail closed on missing data (B4 & Proof 4)."""
         bars = self.get_bars(symbol, limit=1)
         if bars and "close" in bars[-1]:
             return Decimal(str(bars[-1]["close"]))
-        return default_prices.get(symbol, Decimal("30000.00"))
+        return Decimal("0.00")
 
     def get_all_mark_prices(self) -> dict[str, Decimal]:
         """Unified dictionary of mark prices across all instruments."""
@@ -102,18 +140,48 @@ class AegisConnectorServer:
     def seed_mock_data(self) -> None:
         """Seed realistic testnet and market data."""
         now = datetime.now(UTC)
-        base_price = Decimal("30000.00")
+        btc_price = Decimal("30000.00")
+        eth_price = Decimal("2000.00")
+        sol_price = Decimal("100.00")
         
         self.bars_db["BTC/USDT"] = [
             {
                 "symbol": "BTC/USDT",
                 "timeframe": "1d",
                 "ts": int((now - timedelta(days=i)).timestamp()),
-                "open": str(base_price - Decimal(i * 20)),
-                "high": str(base_price - Decimal(i * 20) + Decimal(100)),
-                "low": str(base_price - Decimal(i * 20) - Decimal(100)),
-                "close": str(base_price - Decimal(i * 20)),
+                "open": str(btc_price - Decimal(i * 20)),
+                "high": str(btc_price - Decimal(i * 20) + Decimal(100)),
+                "low": str(btc_price - Decimal(i * 20) - Decimal(100)),
+                "close": str(btc_price - Decimal(i * 20)),
                 "volume": "15000.0"
+            }
+            for i in range(25, -1, -1)
+        ]
+
+        self.bars_db["ETH/USDT"] = [
+            {
+                "symbol": "ETH/USDT",
+                "timeframe": "1d",
+                "ts": int((now - timedelta(days=i)).timestamp()),
+                "open": str(eth_price - Decimal(i * 5)),
+                "high": str(eth_price - Decimal(i * 5) + Decimal(20)),
+                "low": str(eth_price - Decimal(i * 5) - Decimal(20)),
+                "close": str(eth_price - Decimal(i * 5)),
+                "volume": "5000.0"
+            }
+            for i in range(25, -1, -1)
+        ]
+
+        self.bars_db["SOL/USDT"] = [
+            {
+                "symbol": "SOL/USDT",
+                "timeframe": "1d",
+                "ts": int((now - timedelta(days=i)).timestamp()),
+                "open": str(sol_price - Decimal(i)),
+                "high": str(sol_price - Decimal(i) + Decimal(5)),
+                "low": str(sol_price - Decimal(i) - Decimal(5)),
+                "close": str(sol_price - Decimal(i)),
+                "volume": "20000.0"
             }
             for i in range(25, -1, -1)
         ]
@@ -169,7 +237,8 @@ class AegisConnectorServer:
             size=Decimal(str(proposal["size"])),
             stop_loss=Decimal(str(proposal["stop_loss"])),
             take_profit=Decimal(str(proposal["take_profit"])) if proposal.get("take_profit") else None,
-            rationale_id=proposal["rationale_id"]
+            rationale_id=proposal["rationale_id"],
+            reduce_only=bool(proposal.get("reduce_only", False))
         )
 
         stored = StoredProposal(
@@ -192,7 +261,8 @@ class AegisConnectorServer:
                 "size": str(order_prop.size),
                 "stop_loss": str(order_prop.stop_loss),
                 "take_profit": str(order_prop.take_profit) if order_prop.take_profit else "",
-                "rationale_id": order_prop.rationale_id
+                "rationale_id": order_prop.rationale_id,
+                "reduce_only": 1 if order_prop.reduce_only else 0
             })
         except Exception:  # noqa: BLE001, S110
             pass
@@ -271,15 +341,38 @@ class AegisConnectorServer:
         open_notionals = {sym: Decimal(pos["notional"]) for sym, pos in acc_summary["positions"].items()}
 
         mark_price = self.get_mark_price(proposal.symbol)
+        if mark_price <= Decimal(0):
+            return {
+                "passed": False,
+                "status": "REJECTED",
+                "reasons": [f"Missing market data: No valid mark price available for '{proposal.symbol}' (Fail-closed - B4)."]
+            }
 
-        # C4: Real bar timestamp from historical bars database
+        # C4 & B4: Real bar timestamp from historical bars database (fail closed if missing)
         bars = self.get_bars(symbol=proposal.symbol, limit=1)
         if bars and "ts" in bars[-1]:
             last_bar_ts = datetime.fromtimestamp(int(bars[-1]["ts"]), tz=UTC)
         else:
-            last_bar_ts = now - timedelta(minutes=15)
+            last_bar_ts = datetime.fromtimestamp(0, tz=UTC)
 
         gate_mode = self.mode
+
+        # C5 & B4: Compute actual ledger vs broker reconciliation
+        db_fills = self.db.get_fills()
+        if not db_fills:
+            reconciliation_matched = True
+        else:
+            ledger = self.db.reconstruct_ledger(initial_cash=getattr(self.broker, "initial_cash", Decimal("10000.00")))
+            broker_cash = Decimal(str(acc_summary["cash"]))
+            ledger_cash = Decimal(str(ledger["cash"]))
+            reconciliation_matched = (abs(broker_cash - ledger_cash) < Decimal("0.05"))
+        try:
+            self.db.record_reconciliation(
+                matched=reconciliation_matched,
+                diffs=[] if reconciliation_matched else [f"Cash divergence: broker={acc_summary['cash']} vs ledger={ledger['cash']}"]
+            )
+        except Exception:  # noqa: BLE001, S110
+            pass
 
         # Construct deterministic gate context with full wiring
         context = GateContext(
@@ -293,11 +386,12 @@ class AegisConnectorServer:
             last_price=mark_price,
             last_bar_ts=last_bar_ts,
             current_ts=now,
-            bar_interval=timedelta(hours=4),
+            bar_interval=timedelta(days=1),
             kill_switch_active=self.kill_switch_active,
             used_idempotency_keys=self.used_idempotency_keys,
             mode=gate_mode,
             reduce_only=proposal.reduce_only,
+            reconciliation_matched=reconciliation_matched,
             approval_token=approval_token,
             approval_signature=approval_signature,
             proposal_id=p_id
@@ -306,9 +400,29 @@ class AegisConnectorServer:
         # Evaluate against the Risk Gate (DSoR)
         gate_decision = self.gate.evaluate(proposal=proposal, context=context)
 
+        # B7 & Proof 10: Record gate decision to database FIRST (fail-safe hard stop on DB failure)
+        decision_id = uuid.uuid4()
+        try:
+            self.db.record_gate_decision({
+                "decision_id": str(decision_id),
+                "proposal_id": str(p_id),
+                "passed": gate_decision.passed,
+                "mode": gate_mode,
+                "checks": gate_decision.checks,
+                "reasons": gate_decision.reasons,
+                "decided_at": gate_decision.decided_at.isoformat()
+            })
+        except Exception as e:  # noqa: BLE001
+            return {
+                "passed": False,
+                "status": "ERROR",
+                "reasons": [f"Database audit write failed for gate decision: {e}. Order aborted."]
+            }
+
         if not gate_decision.passed:
             return {
                 "passed": False,
+                "status": "REJECTED",
                 "reasons": gate_decision.reasons,
                 "checks": gate_decision.checks
             }
@@ -325,15 +439,20 @@ class AegisConnectorServer:
             order_type=proposal.order_type,
             price=proposal.price,
             size=proposal.size,
-            mark_price=mark_price
+            mark_price=mark_price,
+            stop_loss=proposal.stop_loss,
+            take_profit=proposal.take_profit
         )
 
-        # Persist execution state to database
+        # Persist execution state atomically to database (B7 & Proof 10)
         try:
             self.db.mark_proposal_executed(p_id)
-            self.db.save_order({
-                "order_id": broker_order.order_id,
-                "proposal_id": p_id,
+            pos = self.broker.positions.get(proposal.symbol)
+            pos_size = pos.size if pos else Decimal(0)
+            pos_avg = pos.avg_price if pos else Decimal(0)
+            order_dict = {
+                "order_id": str(broker_order.order_id),
+                "proposal_id": str(p_id),
                 "symbol": broker_order.symbol,
                 "side": broker_order.side.value,
                 "order_type": broker_order.order_type.value,
@@ -341,23 +460,36 @@ class AegisConnectorServer:
                 "size": str(broker_order.size),
                 "status": broker_order.status,
                 "created_at": broker_order.created_at.isoformat()
-            })
-            if broker_order.status == "FILLED":
-                self.db.record_fill({
-                    "order_id": broker_order.order_id,
-                    "symbol": broker_order.symbol,
-                    "side": broker_order.side.value,
-                    "price": str(broker_order.price),
-                    "size": str(broker_order.size),
-                    "fee": str(broker_order.price * broker_order.size * Decimal("0.0010")),
-                    "filled_at": now.isoformat()
-                })
-                pos = self.broker.positions.get(proposal.symbol)
-                size = pos.size if pos else Decimal(0)
-                avg_price = pos.avg_price if pos else Decimal(0)
-                self.db.update_position(proposal.symbol, size, avg_price)
-        except Exception:  # noqa: BLE001, S110
-            pass
+            }
+            fill_dict = {
+                "fill_id": str(uuid.uuid4()),
+                "order_id": str(broker_order.order_id),
+                "symbol": broker_order.symbol,
+                "side": broker_order.side.value,
+                "price": str(broker_order.price),
+                "size": str(broker_order.size),
+                "fee": str(broker_order.price * broker_order.size * Decimal("0.0010")),
+                "filled_at": now.isoformat()
+            } if broker_order.status == "FILLED" else {}
+            pos_update = (proposal.symbol, pos_size, pos_avg) if broker_order.status == "FILLED" else None
+            snapshot_dict = {
+                "snapshot_id": str(uuid.uuid4()),
+                "equity": Decimal(self.get_account()["equity"]),
+                "cash": self.broker.cash,
+                "daily_realized_loss": self.daily_realized_loss
+            }
+            self.db.atomic_execute_order_and_fill(
+                order_dict=order_dict,
+                fill_dict=fill_dict,
+                position_update=pos_update,
+                snapshot_dict=snapshot_dict
+            )
+        except Exception as e:  # noqa: BLE001
+            return {
+                "passed": False,
+                "status": "ERROR",
+                "reasons": [f"Database atomic execution recording failed: {e}"]
+            }
 
         return {
             "passed": True,
@@ -365,6 +497,62 @@ class AegisConnectorServer:
             "order_id": str(broker_order.order_id),
             "checks": gate_decision.checks
         }
+
+    def flatten_positions(self) -> list[dict[str, Any]]:
+        """Emergency flatten: close all open positions with reduce-only orders, bypassing kill switch (B6)."""
+        results: list[dict[str, Any]] = []
+        for sym, pos in list(self.broker.positions.items()):
+            if pos.size <= Decimal(0):
+                continue
+            mark_price = self.get_mark_price(sym)
+            if mark_price <= Decimal(0):
+                mark_price = pos.avg_price
+            order = self.broker.place_order(
+                symbol=sym,
+                side=OrderSide.SELL,
+                order_type=OrderType.LIMIT,
+                price=mark_price,
+                size=pos.size,
+                mark_price=mark_price
+            )
+            results.append({
+                "symbol": sym,
+                "order_id": str(order.order_id),
+                "status": order.status,
+                "size": str(pos.size),
+                "price": str(mark_price)
+            })
+            self.db.update_position(sym, Decimal(0), Decimal(0))
+            self.db.record_equity_snapshot(
+                equity=Decimal(self.get_account()["equity"]),
+                cash=self.broker.cash,
+                daily_realized_loss=self.daily_realized_loss
+            )
+        return results
+
+    def check_stops(self) -> list[dict[str, Any]]:
+        """Check protective stops across active positions and persist any fills (B5)."""
+        executed = self.broker.check_protective_stops(self.get_all_mark_prices())
+        for stop_fill in executed:
+            try:
+                self.db.record_fill({
+                    "order_id": stop_fill["order_id"],
+                    "symbol": stop_fill["symbol"],
+                    "side": stop_fill["side"],
+                    "price": stop_fill["price"],
+                    "size": stop_fill["size"],
+                    "fee": stop_fill["fee"],
+                    "filled_at": stop_fill["ts"]
+                })
+                self.db.update_position(stop_fill["symbol"], Decimal(0), Decimal(0))
+                self.db.record_equity_snapshot(
+                    equity=Decimal(self.get_account()["equity"]),
+                    cash=self.broker.cash,
+                    daily_realized_loss=self.daily_realized_loss
+                )
+            except Exception:  # noqa: BLE001, S110
+                pass
+        return executed
 
     # --- Tool 7: cancel_order ---
     def cancel_order(self, order_id: str | uuid.UUID) -> dict[str, Any]:
@@ -454,35 +642,37 @@ class AegisConnectorServer:
     def approve_and_place_order(
         self,
         proposal_id: str | uuid.UUID,
-        approval_token: str,
+        approval_token: str | None = None,
+        approval_signature: str | None = None,
         current_ts: datetime | None = None
     ) -> dict[str, Any]:
-        """Verify owner approval signature and execute order through Risk Gate."""
+        """Verify owner approval signature and execute order through Risk Gate (B3)."""
         p_id = uuid.UUID(str(proposal_id))
-        env_secret = os.environ.get("AEGIS_OWNER_TOKEN", "aegis_owner_secret_token_live_phase7")
-        valid_static_tokens = {
-            "OWNER_ABDUL_HAYY_SIGNATURE",
-            "OWNER_ABDUL_HAYY_KHAN_SIGNATURE",
-            env_secret
-        }
+        env_secret = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
+        if not env_secret:
+            return {
+                "passed": False,
+                "reasons": ["AEGIS_OWNER_SECRET environment variable is not configured; cannot approve orders."]
+            }
 
-        # Verify either static recognized token or HMAC signature over proposal ID
-        is_valid = approval_token in valid_static_tokens
-        if not is_valid:
+        is_valid = False
+        if approval_token and hmac.compare_digest(approval_token, env_secret):
+            is_valid = True
+        elif approval_signature:
             try:
                 computed_hmac = hmac.new(
                     env_secret.encode("utf-8"),
                     str(p_id).encode("utf-8"),
                     hashlib.sha256
                 ).hexdigest()
-                is_valid = hmac.compare_digest(approval_token, computed_hmac)
+                is_valid = hmac.compare_digest(approval_signature, computed_hmac)
             except Exception:  # noqa: BLE001
                 is_valid = False
 
         if not is_valid:
             return {
                 "passed": False,
-                "reasons": ["Invalid or missing owner approval token."]
+                "reasons": ["Invalid or missing owner approval token/signature."]
             }
 
         stored = self.proposals.get(p_id)

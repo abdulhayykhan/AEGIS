@@ -95,7 +95,7 @@ class AgentLoop:
         # Step 2 & 3: Market data gathering & signal computation (deterministic sorted order)
         for symbol in sorted(self.connector.allowed_instruments):
             # Check timeout enforcement (H1 & Proof G)
-            if (time.monotonic() - start_time) > self.config.timeout_seconds:
+            if (time.monotonic() - start_time) >= self.config.timeout_seconds:
                 stop_reason = f"Execution timeout reached ({self.config.timeout_seconds}s)"
                 return self._build_result("STOPPED", turns_executed, accumulated_cost, stop_reason, proposals_count, orders_count, injection_detected)
 

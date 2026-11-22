@@ -29,6 +29,8 @@ class Position(BaseModel):
     symbol: str
     size: Decimal
     avg_price: Decimal
+    stop_loss: Decimal | None = None
+    take_profit: Decimal | None = None
 
 
 class BaseBroker(ABC):
@@ -55,9 +57,16 @@ class BaseBroker(ABC):
         price: Decimal,
         size: Decimal,
         mark_price: Decimal,
+        stop_loss: Decimal | None = None,
+        take_profit: Decimal | None = None,
         fee_rate: Decimal = Decimal("0.0010")
     ) -> BrokerOrder:
         """Submit order to exchange execution venue."""
+        ...
+
+    @abstractmethod
+    def check_protective_stops(self, current_prices: dict[str, Decimal]) -> list[dict[str, Any]]:
+        """Evaluate open positions against protective stops and take profits (B5)."""
         ...
 
     @abstractmethod
@@ -124,6 +133,8 @@ class PaperBroker(BaseBroker):
         price: Decimal,
         size: Decimal,
         mark_price: Decimal,
+        stop_loss: Decimal | None = None,
+        take_profit: Decimal | None = None,
         fee_rate: Decimal = Decimal("0.0010")  # 0.10% taker fee per PRD Section 11
     ) -> BrokerOrder:
         order_id = uuid.uuid4()
@@ -143,9 +154,23 @@ class PaperBroker(BaseBroker):
                 if existing_pos:
                     new_size = existing_pos.size + size
                     new_avg = ((existing_pos.avg_price * existing_pos.size) + (price * size)) / new_size
-                    self.positions[symbol] = Position(symbol=symbol, size=new_size, avg_price=new_avg)
+                    eff_stop = stop_loss if stop_loss is not None else existing_pos.stop_loss
+                    eff_tp = take_profit if take_profit is not None else existing_pos.take_profit
+                    self.positions[symbol] = Position(
+                        symbol=symbol,
+                        size=new_size,
+                        avg_price=new_avg,
+                        stop_loss=eff_stop,
+                        take_profit=eff_tp
+                    )
                 else:
-                    self.positions[symbol] = Position(symbol=symbol, size=size, avg_price=price)
+                    self.positions[symbol] = Position(
+                        symbol=symbol,
+                        size=size,
+                        avg_price=price,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit
+                    )
             elif side == OrderSide.SELL:
                 existing_pos = self.positions.get(symbol)
                 if not existing_pos or existing_pos.size < size:
@@ -161,7 +186,13 @@ class PaperBroker(BaseBroker):
                 if rem_size <= Decimal(0):
                     self.positions.pop(symbol, None)
                 else:
-                    self.positions[symbol] = Position(symbol=symbol, size=rem_size, avg_price=existing_pos.avg_price)
+                    self.positions[symbol] = Position(
+                        symbol=symbol,
+                        size=rem_size,
+                        avg_price=existing_pos.avg_price,
+                        stop_loss=existing_pos.stop_loss,
+                        take_profit=existing_pos.take_profit
+                    )
 
             self.total_fees_paid += fee
             self.trade_history.append({
@@ -172,6 +203,7 @@ class PaperBroker(BaseBroker):
                 "price": str(price),
                 "size": str(size),
                 "fee": str(fee),
+                "realized_pnl": str(trade_pnl) if side == OrderSide.SELL else "0.00",
                 "ts": now.isoformat()
             })
 
@@ -187,6 +219,77 @@ class PaperBroker(BaseBroker):
         )
         self.orders[order_id] = order
         return order
+
+    def check_protective_stops(self, current_prices: dict[str, Decimal]) -> list[dict[str, Any]]:
+        """Evaluate open positions against protective stops and take profits on every price update (B5)."""
+        executed_stops: list[dict[str, Any]] = []
+        now = datetime.now(UTC)
+
+        for symbol in list(self.positions.keys()):
+            pos = self.positions.get(symbol)
+            if not pos:
+                continue
+            mark = current_prices.get(symbol)
+            if mark is None or mark <= Decimal(0):
+                continue
+
+            # Check Stop Loss breach (for longs: price fell to or below stop_loss)
+            if pos.stop_loss is not None and mark <= pos.stop_loss:
+                exit_price = pos.stop_loss
+                proceeds = exit_price * pos.size
+                fee = proceeds * Decimal("0.0010")
+                self.cash += (proceeds - fee)
+                trade_pnl = (exit_price - pos.avg_price) * pos.size
+                self.realized_pnl += trade_pnl
+                self.total_fees_paid += fee
+
+                trade_id = str(uuid.uuid4())
+                order_id = uuid.uuid4()
+                fill_event = {
+                    "trade_id": trade_id,
+                    "order_id": str(order_id),
+                    "symbol": symbol,
+                    "side": "SELL",
+                    "price": str(exit_price),
+                    "size": str(pos.size),
+                    "fee": str(fee),
+                    "realized_pnl": str(trade_pnl),
+                    "trigger": "STOP_LOSS",
+                    "ts": now.isoformat()
+                }
+                self.trade_history.append(fill_event)
+                executed_stops.append(fill_event)
+                self.positions.pop(symbol, None)
+
+            # Check Take Profit breach (for longs: price rose to or above take_profit)
+            elif pos.take_profit is not None and mark >= pos.take_profit:
+                exit_price = pos.take_profit
+                proceeds = exit_price * pos.size
+                fee = proceeds * Decimal("0.0010")
+                self.cash += (proceeds - fee)
+                trade_pnl = (exit_price - pos.avg_price) * pos.size
+                self.realized_pnl += trade_pnl
+                self.total_fees_paid += fee
+
+                trade_id = str(uuid.uuid4())
+                order_id = uuid.uuid4()
+                fill_event = {
+                    "trade_id": trade_id,
+                    "order_id": str(order_id),
+                    "symbol": symbol,
+                    "side": "SELL",
+                    "price": str(exit_price),
+                    "size": str(pos.size),
+                    "fee": str(fee),
+                    "realized_pnl": str(trade_pnl),
+                    "trigger": "TAKE_PROFIT",
+                    "ts": now.isoformat()
+                }
+                self.trade_history.append(fill_event)
+                executed_stops.append(fill_event)
+                self.positions.pop(symbol, None)
+
+        return executed_stops
 
     def cancel_all_open_orders(self) -> int:
         """Cancel all active SUBMITTED orders (e.g. on kill switch engagement)."""
@@ -290,6 +393,16 @@ class PluggableExchangeBroker(BaseBroker):
                 backoff = self.config.backoff_factor * (2 ** (retries - 1))
                 time.sleep(backoff)
 
+    @staticmethod
+    def sign_request(params: dict[str, Any], secret_key: str) -> str:
+        """Compute HMAC-SHA256 signature over sorted query params for exchange authentication (B2)."""
+        import hashlib
+        import hmac
+        import urllib.parse
+        sorted_params = sorted(params.items(), key=lambda x: x[0])
+        query_string = urllib.parse.urlencode(sorted_params)
+        return hmac.new(secret_key.encode("utf-8"), query_string.encode("utf-8"), hashlib.sha256).hexdigest()
+
     def get_account_summary(self, mark_prices: dict[str, Decimal]) -> dict[str, Any]:
         return self.fallback_paper.get_account_summary(mark_prices)
 
@@ -301,6 +414,8 @@ class PluggableExchangeBroker(BaseBroker):
         price: Decimal,
         size: Decimal,
         mark_price: Decimal,
+        stop_loss: Decimal | None = None,
+        take_profit: Decimal | None = None,
         fee_rate: Decimal = Decimal("0.0010")
     ) -> BrokerOrder:
         # In dry_run or testnet mode, route safely through verified execution simulator
@@ -311,8 +426,13 @@ class PluggableExchangeBroker(BaseBroker):
             price=price,
             size=size,
             mark_price=mark_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
             fee_rate=fee_rate
         )
+
+    def check_protective_stops(self, current_prices: dict[str, Decimal]) -> list[dict[str, Any]]:
+        return self.fallback_paper.check_protective_stops(current_prices)
 
     def cancel_order(self, order_id: uuid.UUID) -> bool:
         return self.fallback_paper.cancel_order(order_id)

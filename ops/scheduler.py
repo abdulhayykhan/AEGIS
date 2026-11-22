@@ -1,4 +1,6 @@
+import json
 import os
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -215,11 +217,29 @@ class AutonomousScheduler:
             if not recomp.verified:
                 errors.extend(recomp.discrepancies)
 
+            # Check protective stops across open positions (B5)
+            self.connector.check_stops()
+
             # Overall success requires all 6 conditions
             all_passed = all(checks.values()) and (len(errors) == 0)
 
-            # Autonomy invariant (PRD Section 17 & 18): Any violation drops a rung
-            if (not all_passed or (cycle_result and cycle_result.proposals_generated_count > 0 and cycle_result.orders_placed_count == 0)) and self.agent_config.mode in ("FULL_AUTONOMY", "LIVE"):
+            # Autonomy invariant (PRD Section 17 & 18): Safety violation or risk gate rejection drops a rung (B8)
+            # In automated execution modes (LIVE, FULL_AUTONOMY), proposals drafted without orders placed indicates risk gate rejections
+            proposals_blocked = bool(
+                self.agent_config.mode in ("LIVE", "FULL_AUTONOMY")
+                and cycle_result
+                and cycle_result.proposals_generated_count > 0
+                and cycle_result.orders_placed_count == 0
+            )
+            safety_violation = (
+                not all_passed
+                or proposals_blocked
+                or (not checks["pre_reconciliation_matched"])
+                or (not checks["post_reconciliation_matched"])
+                or (not checks["data_freshness_verified"])
+                or (not checks["recomputation_verified"])
+            )
+            if safety_violation and self.agent_config.mode in ("FULL_AUTONOMY", "LIVE", "LIVE_WITH_APPROVAL"):
                 all_passed = False
                 old_mode = self.agent_config.mode
                 self.agent_config = AgentConfig(
@@ -228,18 +248,51 @@ class AutonomousScheduler:
                     timeout_seconds=self.agent_config.timeout_seconds,
                     mode="RECOMMEND_ONLY"
                 )
+                incident_id = f"INC-{uuid.uuid4().hex[:8].upper()}"
                 demotion_reasons = list(errors)
-                if cycle_result and cycle_result.proposals_generated_count > 0 and cycle_result.orders_placed_count == 0:
+                if proposals_blocked:
                     demotion_reasons.append("Trade proposals rejected by Risk Gate or execution limits.")
-                errors = demotion_reasons
+                self.connector.db.record_demotion(
+                    incident_id=incident_id,
+                    current_rung="RECOMMEND_ONLY",
+                    reason="; ".join(demotion_reasons)
+                )
                 self.alert_service.notify_demotion(
                     old_rung=old_mode,
                     new_rung="RECOMMEND_ONLY",
                     reasons=demotion_reasons
                 )
 
-            # Heartbeat alert & Dead-Man's Switch ping (PRD 15.3 & Finding H7)
+            # Record run and equity snapshot in database every cycle (B7 & Proof 2)
+            run_id = f"RUN-{uuid.uuid4().hex[:12].upper()}"
+            status_str = "SUCCESS" if all_passed else "FAILED"
+            turns = cycle_result.turns_executed if cycle_result else 0
+            cost = cycle_result.cost_usd if cycle_result else Decimal("0.00")
+            props = cycle_result.proposals_generated_count if cycle_result else 0
+            orders = cycle_result.orders_placed_count if cycle_result else 0
+            err_msg = "; ".join(errors) if errors else ""
+            self.connector.db.record_run(
+                run_id=run_id,
+                mode=active_mode,
+                status=status_str,
+                started_at=now.isoformat(),
+                completed_at=datetime.now(UTC).isoformat(),
+                turns_executed=turns,
+                cost_usd=cost,
+                proposals_count=props,
+                orders_count=orders,
+                error_message=err_msg,
+                details_json=json.dumps({"checks": checks})
+            )
+
             acc = self.connector.get_account()
+            self.connector.db.record_equity_snapshot(
+                equity=Decimal(str(acc["equity"])),
+                cash=Decimal(str(acc["cash"])),
+                daily_realized_loss=self.connector.daily_realized_loss
+            )
+
+            # Heartbeat alert & Dead-Man's Switch ping (PRD 15.3 & Finding H7)
             self.alert_service.notify_heartbeat(
                 equity=Decimal(str(acc["equity"])),
                 daily_pnl=self.connector.broker.realized_pnl,

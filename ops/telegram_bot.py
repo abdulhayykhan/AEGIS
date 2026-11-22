@@ -31,9 +31,9 @@ class TelegramCommandHandler:
 
     def handle_command(self, user_chat_id: str, command_text: str) -> str:
         """Process an incoming command from Telegram, verifying authorization first."""
-        # 1. Authorization check
-        if self.authorized_chat_id and str(user_chat_id).strip() != str(self.authorized_chat_id).strip():
-            return "⛔ Unauthorized: Access denied. This incident has been logged."
+        # 1. Authorization check (Fail closed: must have authorized_chat_id configured - B4 & Proof 8)
+        if not self.authorized_chat_id or str(user_chat_id).strip() != str(self.authorized_chat_id).strip():
+            return "⛔ Unauthorized: Access denied. Telegram command interface requires valid AEGIS_TELEGRAM_CHAT_ID authorization."
 
         text = command_text.strip()
         parts = text.split()
@@ -116,9 +116,13 @@ class TelegramCommandHandler:
         except ValueError:
             return f"❌ Invalid UUID format: `{proposal_id_str}`"
 
+        owner_token = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
+        if not owner_token:
+            return "❌ *APPROVAL REJECTED*: AEGIS_OWNER_SECRET is not configured on this server."
+
         res = self.server.approve_and_place_order(
             proposal_id=p_id,
-            approval_token="OWNER_ABDUL_HAYY_SIGNATURE"
+            approval_token=owner_token
         )
         if res.get("passed"):
             order_data = res.get("order", {})

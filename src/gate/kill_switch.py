@@ -50,12 +50,17 @@ class StandaloneKillSwitch:
         self.lock_file_path.write_text(state.model_dump_json(indent=2), encoding="utf-8")
 
     def disengage(self, operator: str, token: str | None = None) -> None:
-        """Clear kill switch. Programmatically forbidden to AI agents."""
+        """Clear kill switch. Programmatically forbidden to AI agents (B4 & Proof 8)."""
+        import hmac
+
         if operator not in AUTHORIZED_OPERATORS:
             raise PermissionError(f"Unauthorized operator '{operator}' cannot disengage the Kill Switch.")
 
-        env_token = os.environ.get("AEGIS_OWNER_TOKEN")
-        if env_token and token != env_token:
+        env_token = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
+        if not env_token:
+            raise PermissionError("AEGIS_OWNER_SECRET environment variable is not configured. Cannot disengage Kill Switch.")
+
+        if not token or not hmac.compare_digest(token, env_token):
             raise PermissionError("Invalid owner security token for kill switch disengagement.")
 
         if self.lock_file_path.exists():

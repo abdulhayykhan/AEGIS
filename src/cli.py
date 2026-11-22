@@ -33,12 +33,23 @@ def build_parser() -> argparse.ArgumentParser:
     kill_parser.add_argument("--reason", default="Manual CLI intervention", help="Reason for halting")
     kill_parser.add_argument("--owner", default="Abdul Hayy Khan", help="Operator identity")
     kill_parser.add_argument("--disengage", action="store_true", help="Disengage the kill switch")
+    kill_parser.add_argument("--token", default=None, help="Owner security token required to disengage")
     kill_parser.add_argument("--lock-path", default=str(DEFAULT_LOCK_FILE), help="Path to lock file")
 
-    # 4. Reconcile
+    # 4. Restore Autonomy Rung from Demotion
+    restore_parser = subparsers.add_parser("restore", help="Resolve active demotion and restore autonomy rung (B8)")
+    restore_parser.add_argument("--incident", required=True, help="Incident ID to resolve")
+    restore_parser.add_argument("--owner", default="Abdul Hayy Khan", help="Operator identity")
+    restore_parser.add_argument("--token", default=None, help="Owner security token")
+
+    # 5. Emergency Flatten
+    flatten_parser = subparsers.add_parser("flatten", help="Emergency flatten: close all open positions with reduce-only orders (B6)")
+    flatten_parser.add_argument("--owner", default="Abdul Hayy Khan", help="Operator identity")
+
+    # 6. Reconcile
     subparsers.add_parser("reconcile", help="Verify minor-unit reconciliation between DB and broker")
 
-    # 5. Check Promotion Eligibility
+    # 7. Check Promotion Eligibility
     promote_parser = subparsers.add_parser("promote", help="Check database evidence against autonomy promotion exit criteria")
     promote_parser.add_argument(
         "--target",
@@ -47,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Target autonomy rung"
     )
 
-    # 6. Weekly Performance Report
+    # 8. Weekly Performance Report
     subparsers.add_parser("report", help="Generate weekly performance and audit report from database")
 
     return parser
@@ -82,11 +93,33 @@ def main() -> int:
         lock_file = Path(args.lock_path)
         ks = StandaloneKillSwitch(lock_file_path=lock_file)
         if args.disengage:
-            ks.disengage(operator=args.owner)
-            print(f"Kill switch DISENGAGED by {args.owner}. Operations may resume.")
+            try:
+                ks.disengage(operator=args.owner, token=args.token)
+                print(f"Kill switch DISENGAGED by {args.owner}. Operations may resume.")
+            except Exception as e:  # noqa: BLE001
+                print(f"Error disengaging kill switch: {e}")
+                return 1
         else:
             ks.engage(reason=args.reason, operator=args.owner)
             print(f"Kill switch ENGAGED by {args.owner}. Reason: {args.reason}")
+        return 0
+
+    elif args.subcommand == "restore":
+        import hmac
+        import os
+        env_secret = os.environ.get("AEGIS_OWNER_SECRET") or os.environ.get("AEGIS_OWNER_TOKEN")
+        if env_secret and (not args.token or not hmac.compare_digest(args.token, env_secret)):
+            print("Error: Invalid or missing owner security token. Cannot resolve demotion incident.")
+            return 1
+        server.db.resolve_demotion(incident_id=args.incident, operator=args.owner)
+        print(f"Incident '{args.incident}' resolved by {args.owner}. Autonomy rung restored.")
+        return 0
+
+    elif args.subcommand == "flatten":
+        results = server.flatten_positions()
+        print(f"Emergency Flatten executed by {args.owner}. Closed {len(results)} positions.")
+        for r in results:
+            print(f"- {r['symbol']}: {r['size']} units at ${r['price']} ({r['status']})")
         return 0
 
     elif args.subcommand == "reconcile":

@@ -26,16 +26,18 @@ def test_kill_switch_engagement_and_persistence(temp_kill_file: Path) -> None:
     assert "Manual intervention" in ks_new.get_status().reason
 
 
-def test_kill_switch_disengagement_by_owner(temp_kill_file: Path) -> None:
-    """Verify that only authorized owner disengagement can clear the kill switch."""
+def test_kill_switch_disengagement_by_owner(temp_kill_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that only authorized owner disengagement with valid token can clear the kill switch."""
+    secret = "owner_secret_key_789"
+    monkeypatch.setenv("AEGIS_OWNER_SECRET", secret)
     ks = StandaloneKillSwitch(lock_file_path=temp_kill_file)
     ks.engage(reason="Test", operator="Abdul Hayy")
     assert ks.is_engaged() is True
 
     # Agent cannot clear it; only authorized operator
     with pytest.raises(PermissionError, match="Unauthorized"):
-        ks.disengage(operator="AI_AGENT")
+        ks.disengage(operator="AI_AGENT", token=secret)
 
-    # Authorized owner disengages
-    ks.disengage(operator="Abdul Hayy")
+    # Authorized owner disengages with valid token
+    ks.disengage(operator="Abdul Hayy", token=secret)
     assert ks.is_engaged() is False

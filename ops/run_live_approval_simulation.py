@@ -12,13 +12,21 @@ from src.connector.server import AegisConnectorServer
 
 def run_live_approval_simulation(
     num_days: int = 28,  # 4 weeks = 28 days (Phase 7 Exit Criteria)
-    output_report_path: Path | None = None
+    output_report_path: Path | None = None,
+    db_path: Path | None = None
 ) -> dict[str, Any]:
     """Execute multi-week simulated small live run with owner approval for Phase 7 exit criteria validation."""
-    server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL")
+    import os
+
+    from src.storage.db import Database
+
+    owner_secret = os.environ.get("AEGIS_OWNER_SECRET") or "aegis_sim_owner_secret_token_live"
+    os.environ["AEGIS_OWNER_SECRET"] = owner_secret
+    db = Database(db_path=db_path) if db_path else None
+    server = AegisConnectorServer(mode="LIVE_WITH_APPROVAL", db=db)
     alert_service = AlertService()
 
-    lock_file = Path("scheduler_live_sim.lock")
+    lock_file = (db_path.parent / "scheduler_live_sim.lock") if db_path else Path("scheduler_live_sim.lock")
     sched_config = SchedulerConfig(lock_file=lock_file)
     agent_config = AgentConfig(mode="LIVE_WITH_APPROVAL")
     scheduler = AutonomousScheduler(
@@ -76,7 +84,7 @@ def run_live_approval_simulation(
             p_id = uuid.UUID(p["proposal_id"])
             approval_res = server.approve_and_place_order(
                 proposal_id=p_id,
-                approval_token="OWNER_ABDUL_HAYY_SIGNATURE",
+                approval_token=owner_secret,
                 current_ts=current_sim_date
             )
             if approval_res["passed"]:
