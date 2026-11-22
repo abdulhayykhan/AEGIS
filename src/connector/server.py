@@ -68,13 +68,13 @@ class AegisConnectorServer:
                 "symbol": "BTC/USDT",
                 "timeframe": "1d",
                 "ts": int((now - timedelta(days=i)).timestamp()),
-                "open": str(base_price - Decimal(i * 10)),
-                "high": str(base_price + Decimal(100)),
-                "low": str(base_price - Decimal(100)),
-                "close": str(base_price),
+                "open": str(base_price - Decimal(i * 20)),
+                "high": str(base_price - Decimal(i * 20) + Decimal(100)),
+                "low": str(base_price - Decimal(i * 20) - Decimal(100)),
+                "close": str(base_price - Decimal(i * 20)),
                 "volume": "15000.0"
             }
-            for i in range(10, 0, -1)
+            for i in range(25, -1, -1)
         ]
 
         self.news_db = [
@@ -172,7 +172,12 @@ class AegisConnectorServer:
         open_positions = {sym: Decimal(pos["size"]) for sym, pos in acc_summary["positions"].items()}
         open_notionals = {sym: Decimal(pos["notional"]) for sym, pos in acc_summary["positions"].items()}
 
-        mark_price = Decimal("30000.00")
+        mark_prices = {
+            "BTC/USDT": Decimal("30000.00"),
+            "ETH/USDT": Decimal("2000.00"),
+            "SOL/USDT": Decimal("100.00"),
+        }
+        mark_price = mark_prices.get(proposal.symbol, Decimal("30000.00"))
         last_bar_ts = now - timedelta(minutes=15)
 
         # Construct deterministic gate context

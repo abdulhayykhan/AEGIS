@@ -39,6 +39,9 @@ class PaperBroker:
         self.cash = initial_cash
         self.positions: dict[str, Position] = {}
         self.orders: dict[uuid.UUID, BrokerOrder] = {}
+        self.trade_history: list[dict[str, Any]] = []
+        self.realized_pnl: Decimal = Decimal("0.00")
+        self.total_fees_paid: Decimal = Decimal("0.00")
 
     def get_account_summary(self, mark_prices: dict[str, Decimal]) -> dict[str, Any]:
         unrealized_pnl = Decimal("0.00")
@@ -84,6 +87,7 @@ class PaperBroker:
 
         if status == "FILLED":
             cost = price * size
+            fee = Decimal("0.00")
             if side == OrderSide.BUY:
                 self.cash -= cost
                 existing_pos = self.positions.get(symbol)
@@ -97,11 +101,26 @@ class PaperBroker:
                 self.cash += cost
                 existing_pos = self.positions.get(symbol)
                 if existing_pos:
+                    closed_size = min(existing_pos.size, size)
+                    trade_pnl = (price - existing_pos.avg_price) * closed_size
+                    self.realized_pnl += trade_pnl
                     rem_size = existing_pos.size - size
                     if rem_size <= Decimal(0):
                         self.positions.pop(symbol, None)
                     else:
                         self.positions[symbol] = Position(symbol=symbol, size=rem_size, avg_price=existing_pos.avg_price)
+
+            self.total_fees_paid += fee
+            self.trade_history.append({
+                "trade_id": str(uuid.uuid4()),
+                "order_id": str(order_id),
+                "symbol": symbol,
+                "side": side.value,
+                "price": str(price),
+                "size": str(size),
+                "fee": str(fee),
+                "ts": now.isoformat()
+            })
 
         order = BrokerOrder(
             order_id=order_id,
