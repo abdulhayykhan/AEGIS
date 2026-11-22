@@ -105,10 +105,34 @@ AEGIS was engineered in strict phase sequence per PRD Section 17, advancing only
 - [x] **Phase 8: Full Autonomy (Target State)**
   - *Exit Criteria*: Autonomous live execution inside unchanged hard limits; demotion invariant ("any violation drops a rung") tested and verified.
   - *Artifacts*: [Full Autonomy Case & Portfolio](docs/full-autonomy-case.md), `tests/unit/test_full_autonomy.py`.
+- [x] **Phase 9: Production Deployment & Operations**
+  - *Exit Criteria*: Unified CLI (`aegis`), production Dockerization (`Dockerfile`, `docker-compose.yml`), `.env.example`, automated cron runner (`ops/cron.sh`).
+  - *Artifacts*: `src/cli.py`, `Dockerfile`, `docker-compose.yml`, `ops/cron.sh`, `.env.example`.
 
 ---
 
-## 5. Development Setup
+## 5. Unified CLI & Operations
+
+AEGIS provides a first-class command-line interface for human supervision and operational control:
+
+```bash
+# View real-time operations & risk dashboard
+aegis dashboard
+
+# Execute an autonomous trading cycle (enforcing all 6 post-flight conditions)
+aegis run --mode PAPER_EXECUTION
+
+# Verify minor-unit reconciliation between PostgreSQL state and broker
+aegis reconcile
+
+# Emergency Kill Switch (Manual halt / resume)
+aegis kill --reason "Manual supervisor intervention"
+aegis kill --disengage
+```
+
+---
+
+## 6. Development Setup
 
 ### Prerequisites
 - Python 3.12+

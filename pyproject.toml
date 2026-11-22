@@ -14,6 +14,9 @@ dependencies = [
     "tabulate>=0.9.0",
 ]
 
+[project.scripts]
+aegis = "src.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2.0",
