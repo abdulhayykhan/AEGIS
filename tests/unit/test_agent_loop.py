@@ -56,3 +56,50 @@ def test_agent_loop_recommend_only_disallows_order_placement() -> None:
     result = agent.execute_cycle()
     assert result.orders_placed_count == 0
     assert result.proposals_generated_count >= 0
+
+
+def test_agent_loop_with_council_deliberation() -> None:
+    """Verify that when enable_council=True, council deliberation runs and gates proposals."""
+    server = AegisConnectorServer(mode="PAPER")
+    server.seed_mock_data()
+
+    config = AgentConfig(
+        max_turns=12,
+        cost_cap_usd=Decimal("1.00"),
+        mode="RECOMMEND_ONLY",
+        enable_council=True,
+        min_conviction=Decimal("0.70")
+    )
+    agent = AgentLoop(connector=server, config=config)
+
+    result = agent.execute_cycle()
+    assert result.status == "SUCCESS"
+    assert result.orders_placed_count == 0
+
+
+def test_agent_loop_council_bear_warning_suppresses_proposal() -> None:
+    """Verify that severe bear warnings (e.g. whale distribution) suppress proposal creation."""
+    server = AegisConnectorServer(mode="PAPER")
+    server.seed_mock_data()
+
+    # Simulate heavy exchange netflow inflow (distribution)
+    server.get_onchain_flow = lambda symbol: {  # type: ignore[method-assign]
+        "symbol": symbol,
+        "exchange_netflow_usd": "50000000.00",
+        "whale_accumulation_score": "20.0",
+        "dex_liquidity_change_pct": "-10.0",
+        "smart_money_bias": "DISTRIBUTION_BEARISH"
+    }
+
+    config = AgentConfig(
+        max_turns=12,
+        cost_cap_usd=Decimal("1.00"),
+        mode="RECOMMEND_ONLY",
+        enable_council=True,
+        min_conviction=Decimal("0.70")
+    )
+    agent = AgentLoop(connector=server, config=config)
+
+    result = agent.execute_cycle()
+    assert result.status == "SUCCESS"
+    assert result.proposals_generated_count == 0, "Bear warning must suppress proposal creation"

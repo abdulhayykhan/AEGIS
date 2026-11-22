@@ -3,9 +3,11 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
+from src.agent.council import TradeCouncil
 from src.connector.server import AegisConnectorServer
 from src.signals.indicators import calculate_atr, calculate_sma, compute_trend_signal
 from src.signals.models import Bar, SignalType
+from src.signals.onchain import SmartMoneyMetrics
 from src.signals.sizing import calculate_position_size
 
 
@@ -16,6 +18,8 @@ class AgentConfig(BaseModel):
     cost_cap_usd: Decimal = Decimal("1.00")
     timeout_seconds: int = 300
     mode: str = "RECOMMEND_ONLY"  # Phase 5: RECOMMEND_ONLY
+    enable_council: bool = False  # Deliberative Multi-Agent Council (TauricResearch/TradingAgents inspired)
+    min_conviction: Decimal = Decimal("0.70")
 
 
 class RunResult(BaseModel):
@@ -37,6 +41,7 @@ class AgentLoop:
     def __init__(self, connector: AegisConnectorServer, config: AgentConfig | None = None) -> None:
         self.connector = connector
         self.config = config or AgentConfig()
+        self.council = TradeCouncil()
 
     def execute_cycle(
         self,
@@ -125,6 +130,27 @@ class AgentLoop:
 
             # Step 5: Proposal formulation
             if signal == SignalType.BUY and not has_pos and atr is not None and atr > Decimal(0):
+                rationale_id = f"SMA_TREND_{symbol}"
+
+                if self.config.enable_council:
+                    flow = self.connector.get_onchain_flow(symbol)
+                    onchain_metrics = SmartMoneyMetrics(
+                        symbol=symbol,
+                        exchange_netflow_usd=Decimal(str(flow.get("exchange_netflow_usd", "0"))),
+                        whale_accumulation_score=Decimal(str(flow.get("whale_accumulation_score", "50"))),
+                        dex_liquidity_change_pct=Decimal(str(flow.get("dex_liquidity_change_pct", "0")))
+                    )
+                    memo = self.council.deliberate(
+                        symbol=symbol,
+                        bars=bars,
+                        onchain=onchain_metrics,
+                        has_position=has_pos
+                    )
+                    if memo.recommendation != "BUY" or memo.conviction_score < self.config.min_conviction:
+                        # Abort proposal if Bear warning prevailed or conviction below threshold
+                        continue
+                    rationale_id = f"COUNCIL_BUY_{symbol}_CONV_{memo.conviction_score:.2f}_{memo.regime.value}"
+
                 stop_distance = Decimal("2.0") * atr
                 stop_loss = current_close - stop_distance
                 if stop_loss > Decimal(0):
@@ -145,7 +171,7 @@ class AgentLoop:
                             "size": str(sizing.units),
                             "stop_loss": str(stop_loss),
                             "take_profit": str(current_close + (Decimal("4.0") * atr)),
-                            "rationale_id": f"SMA_TREND_{symbol}"
+                            "rationale_id": rationale_id
                         }
                         submission = self.connector.submit_proposal(proposal_payload)
                         if submission.get("stored"):

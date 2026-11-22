@@ -191,3 +191,22 @@ def test_contract_get_run_state(connector: AegisConnectorServer) -> None:
     assert "daily_realized_loss" in state
     assert "remaining_risk_budget" in state
     assert "kill_switch_active" in state
+
+
+def test_contract_get_onchain_flow(connector: AegisConnectorServer) -> None:
+    """Contract: get_onchain_flow returns smart money and netflow indicators (nansen-cli inspired)."""
+    flow = connector.get_onchain_flow(symbol="BTC/USDT")
+    assert flow["symbol"] == "BTC/USDT"
+    assert "exchange_netflow_usd" in flow
+    assert "whale_accumulation_score" in flow
+    assert "smart_money_bias" in flow
+
+
+def test_contract_get_technical_summary(connector: AegisConnectorServer) -> None:
+    """Contract: get_technical_summary returns multi-timeframe indicators (TradingView inspired)."""
+    summary = connector.get_technical_summary(symbol="BTC/USDT")
+    assert summary["symbol"] == "BTC/USDT"
+    assert "rsi_14" in summary
+    assert "market_regime" in summary
+    assert "trend_1d" in summary
+    assert "fvg_detected" in summary

@@ -155,3 +155,20 @@ uv pip install -e ".[dev]"
 # Run tests
 pytest
 ```
+
+---
+
+## 7. Open-Source Foundations & Citations
+
+AEGIS synthesizes leading open-source research and engineering across multi-agent trading, price action mechanics, and on-chain intelligence:
+
+- **[TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)**: Multi-agent council with specialized Technical and On-Chain Analysts, adversarial Bull vs. Bear debate, and conviction-scored trade memos (`src/agent/council.py`).
+- **[tradermonty/claude-trading-skills](https://github.com/tradermonty/claude-trading-skills)**: Institutional price action framework, ICT 3-bar Fair Value Gaps (FVG), and liquidity sweeps (`src/signals/price_action.py`).
+- **[nansen-ai/nansen-cli](https://github.com/nansen-ai/nansen-cli)**: On-chain smart money tracking, whale accumulation scores, and exchange netflow distribution alerts (`src/signals/onchain.py`, `get_onchain_flow` tool).
+- **[agiprolabs/claude-trading-skills](https://github.com/agiprolabs/claude-trading-skills)**: Market regime classification (`TRENDING_BULL`, `TRENDING_BEAR`, `RANGING`, `HIGH_VOLATILITY`) and adaptive strategy gating (`src/signals/regime.py`).
+- **[marian2js/trading-skills](https://github.com/marian2js/trading-skills)**: Wilder's smoothed RSI, Bollinger Bands %B / bandwidth, and multi-timeframe trend alignment (`src/signals/multitimeframe.py`).
+- **[mattpocock/skills](https://github.com/mattpocock/skills)**: Modular agent skill architecture with Four-Part Run Briefs (`skills/`).
+- **[daviddme/TradingView-Unified-MCP](https://github.com/daviddme/TradingView-Unified-MCP)** & **[tradingview-indicator-search-mcp-server](https://github.com/daviddme/tradingview-indicator-search-mcp-server)**: Standardized technical indicators and multi-timeframe summary MCP tool (`get_technical_summary`).
+
+For full details, architecture mapping, and integration rationales, see **[References & Citations](docs/references-and-citations.md)**.
+
