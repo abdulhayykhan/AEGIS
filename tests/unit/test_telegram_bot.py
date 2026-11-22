@@ -66,3 +66,16 @@ def test_telegram_approve_proposal_command(monkeypatch: pytest.MonkeyPatch) -> N
 
     response = handler.handle_command(user_chat_id="12345678", command_text=f"/approve {p_id}")
     assert "APPROVED & FILLED" in response
+
+
+def test_telegram_sender_user_id_verification() -> None:
+    server = AegisConnectorServer(mode="PAPER")
+    handler = TelegramCommandHandler(server=server, authorized_chat_id="12345678", authorized_user_id="user_owner_99")
+
+    # Correct chat_id but wrong user_id
+    res_wrong_user = handler.handle_command(user_chat_id="12345678", command_text="/status", sender_user_id="user_imposter_01")
+    assert "Sender user ID does not match" in res_wrong_user
+
+    # Correct chat_id and correct user_id
+    res_valid = handler.handle_command(user_chat_id="12345678", command_text="/status", sender_user_id="user_owner_99")
+    assert "AEGIS SYSTEM STATUS" in res_valid

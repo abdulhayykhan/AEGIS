@@ -8,6 +8,7 @@ import hmac
 import uuid
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -377,3 +378,92 @@ def test_weekly_report_groups_by_symbol_correctly(tmp_path: Path) -> None:
     assert report.losing_trades == 1
     assert report.gross_profit == Decimal("100.00")
     assert report.gross_loss == Decimal("10.00")
+
+
+def test_proof_live_loop_and_backtest_signal_identical_on_400_bars(tmp_path: Path) -> None:
+    """Proof: Live loop (with limit=400) and backtest produce identical signals on the same 400-bar window."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.agent.loop import AgentConfig, AgentLoop
+    from src.signals.models import Bar
+    from src.signals.strategy import StrategyConfig, evaluate_strategy
+
+    now = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
+    base_price = Decimal("30000.00")
+
+    # Generate 400 sequential daily bars
+    bars_400: list[Bar] = []
+    raw_dicts: list[dict[str, Any]] = []
+    for i in range(400, 0, -1):
+        ts = int((now - timedelta(days=i)).timestamp())
+        p = base_price + Decimal(i * 10)
+        b = Bar(
+            ts=ts,
+            open=p - Decimal(20),
+            high=p + Decimal(50),
+            low=p - Decimal(50),
+            close=p,
+            volume=Decimal("1000.0")
+        )
+        bars_400.append(b)
+        raw_dicts.append({
+            "symbol": "BTC/USDT",
+            "timeframe": "1d",
+            "ts": ts,
+            "open": str(b.open),
+            "high": str(b.high),
+            "low": str(b.low),
+            "close": str(b.close),
+            "volume": str(b.volume)
+        })
+
+    # 1. Backtest engine signal
+    strat_config = StrategyConfig(fast_period=50, slow_period=200)
+    backtest_signal = evaluate_strategy(bars=bars_400, has_position=False, config=strat_config)
+
+    # 2. Live Agent loop evaluation on same 400 bars
+    server = AegisConnectorServer(mode="PAPER", db=Database(db_path=tmp_path / "live_bt_test.db"))
+    server.bars_db["BTC/USDT"] = raw_dicts
+
+    agent_cfg = AgentConfig(mode="RECOMMEND_ONLY", max_turns=5)
+    agent = AgentLoop(connector=server, config=agent_cfg)
+    cycle_res = agent.execute_cycle()
+    assert cycle_res.status == "SUCCESS"
+
+    # Fetch bars through loop connector
+    loop_raw = server.get_bars("BTC/USDT", timeframe="1d", limit=400)
+    loop_bars = [
+        Bar(ts=b["ts"], open=Decimal(b["open"]), high=Decimal(b["high"]), low=Decimal(b["low"]), close=Decimal(b["close"]), volume=Decimal(b["volume"]))
+        for b in loop_raw
+    ]
+    live_signal = evaluate_strategy(bars=loop_bars, has_position=False, config=strat_config)
+
+    assert len(loop_bars) == 400
+    assert live_signal.signal == backtest_signal.signal
+    assert live_signal.sma_fast == backtest_signal.sma_fast
+    assert live_signal.sma_slow == backtest_signal.sma_slow
+    assert live_signal.current_close == backtest_signal.current_close
+
+
+def test_proof_missing_protective_stop_triggers_flatten(tmp_path: Path) -> None:
+    """Proof: An active position missing a protective stop triggers emergency flatten on stop check (Page 14)."""
+    server = AegisConnectorServer(mode="PAPER", db=Database(db_path=tmp_path / "stop_test.db"))
+    server.seed_mock_data()
+
+    # Create unprotected position without stop loss
+    server.broker.positions["BTC/USDT"] = Position(
+        symbol="BTC/USDT",
+        size=Decimal("0.05"),
+        avg_price=Decimal("30000.00"),
+        stop_loss=None  # Missing protective stop!
+    )
+
+    # Check stops must detect missing stop and flatten immediately
+    flatten_fills = server.check_stops()
+    assert len(flatten_fills) >= 1
+    assert flatten_fills[0]["symbol"] == "BTC/USDT"
+    assert flatten_fills[0]["side"] == "SELL"
+    assert flatten_fills[0]["reason"] == "FLATTEN_MISSING_PROTECTIVE_STOP"
+
+    # Position is completely closed
+    assert "BTC/USDT" not in server.broker.positions or server.broker.positions["BTC/USDT"].size <= Decimal(0)

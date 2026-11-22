@@ -36,7 +36,11 @@ class AlertService:
     ) -> None:
         self.telegram_token = telegram_token
         self.chat_id = chat_id
-        self.heartbeat_url = heartbeat_url or os.environ.get("AEGIS_HEARTBEAT_WEBHOOK_URL")
+        self.heartbeat_url = (
+            heartbeat_url
+            or os.environ.get("AEGIS_HEARTBEAT_WEBHOOK_URL")
+            or os.environ.get("DEAD_MANS_SWITCH_WEBHOOK_URL")
+        )
         self._history: list[AlertMessage] = []
 
     def ping_external_heartbeat(self, status: str = "success", message: str = "") -> None:
@@ -71,8 +75,8 @@ class AlertService:
 
     def _dispatch(self, msg: AlertMessage) -> None:
         """Dispatch message to external channels (e.g. Telegram) if configured."""
-        token = self.telegram_token or os.environ.get("AEGIS_TELEGRAM_BOT_TOKEN")
-        chat_id = self.chat_id or os.environ.get("AEGIS_TELEGRAM_CHAT_ID")
+        token = self.telegram_token or os.environ.get("AEGIS_TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+        chat_id = self.chat_id or os.environ.get("AEGIS_TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID")
         if not token or not chat_id:
             return
         try:

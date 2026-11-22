@@ -110,7 +110,7 @@ class AgentLoop:
             turns_executed += 1
             accumulated_cost += mock_cost_per_turn
 
-            raw_bars = self.connector.get_bars(symbol=symbol, timeframe="1d", limit=60)
+            raw_bars = self.connector.get_bars(symbol=symbol, timeframe="1d", limit=400)
             if not raw_bars:
                 continue
 

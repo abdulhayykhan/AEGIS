@@ -23,17 +23,31 @@ class TelegramCommandHandler:
         self,
         server: AegisConnectorServer,
         authorized_chat_id: str | None = None,
+        authorized_user_id: str | None = None,
         kill_switch: StandaloneKillSwitch | None = None
     ) -> None:
         self.server = server
-        self.authorized_chat_id = authorized_chat_id or os.environ.get("AEGIS_TELEGRAM_CHAT_ID", "")
+        self.authorized_chat_id = (
+            authorized_chat_id
+            or os.environ.get("AEGIS_TELEGRAM_CHAT_ID", "")
+            or os.environ.get("TELEGRAM_CHAT_ID", "")
+        )
+        self.authorized_user_id = (
+            authorized_user_id
+            or os.environ.get("AEGIS_TELEGRAM_USER_ID", "")
+            or os.environ.get("TELEGRAM_USER_ID", "")
+        )
         self.kill_switch = kill_switch or StandaloneKillSwitch()
 
-    def handle_command(self, user_chat_id: str, command_text: str) -> str:
+    def handle_command(self, user_chat_id: str, command_text: str, sender_user_id: str | None = None) -> str:
         """Process an incoming command from Telegram, verifying authorization first."""
         # 1. Authorization check (Fail closed: must have authorized_chat_id configured - B4 & Proof 8)
         if not self.authorized_chat_id or str(user_chat_id).strip() != str(self.authorized_chat_id).strip():
             return "⛔ Unauthorized: Access denied. Telegram command interface requires valid AEGIS_TELEGRAM_CHAT_ID authorization."
+
+        # 2. Sender user ID verification if configured
+        if self.authorized_user_id and sender_user_id and str(sender_user_id).strip() != str(self.authorized_user_id).strip():
+            return "⛔ Unauthorized: Sender user ID does not match AEGIS_TELEGRAM_USER_ID."
 
         text = command_text.strip()
         parts = text.split()
@@ -130,3 +144,33 @@ class TelegramCommandHandler:
         else:
             reasons = "; ".join(res.get("reasons", ["Rejected by Risk Gate"]))
             return f"❌ *APPROVAL REJECTED BY RISK GATE*\n{reasons}"
+
+    def poll_updates(self, bot_token: str | None = None, offset: int = 0) -> int:
+        """Fetch pending Telegram messages and dispatch commands, returning new offset."""
+        import json
+        import urllib.request
+
+        token = bot_token or os.environ.get("AEGIS_TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
+        if not token:
+            return offset
+        url = f"https://api.telegram.org/bot{token}/getUpdates?offset={offset}&timeout=5"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "AEGIS-TelegramBot/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                for item in data.get("result", []):
+                    update_id = item.get("update_id", offset)
+                    offset = max(offset, update_id + 1)
+                    msg = item.get("message", {})
+                    chat_id = str(msg.get("chat", {}).get("id", ""))
+                    sender_id = str(msg.get("from", {}).get("id", ""))
+                    text = msg.get("text", "")
+                    if text:
+                        reply = self.handle_command(user_chat_id=chat_id, command_text=text, sender_user_id=sender_id)
+                        send_url = f"https://api.telegram.org/bot{token}/sendMessage"
+                        send_payload = json.dumps({"chat_id": chat_id, "text": reply}).encode("utf-8")
+                        send_req = urllib.request.Request(send_url, data=send_payload, headers={"Content-Type": "application/json"})
+                        urllib.request.urlopen(send_req, timeout=5)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        return offset

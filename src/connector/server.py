@@ -531,8 +531,37 @@ class AegisConnectorServer:
         return results
 
     def check_stops(self) -> list[dict[str, Any]]:
-        """Check protective stops across active positions and persist any fills (B5)."""
+        """Check protective stops across active positions and persist any fills (B5).
+
+        If any active position is missing a protective stop, triggers emergency flatten (Page 14).
+        """
         executed = self.broker.check_protective_stops(self.get_all_mark_prices())
+
+        # Check for unprotected positions (missing stop loss) and flatten them immediately
+        for sym, pos in list(self.broker.positions.items()):
+            if pos.size > Decimal(0) and pos.stop_loss is None:
+                mark_p = self.get_mark_price(sym)
+                if mark_p <= Decimal(0):
+                    mark_p = pos.avg_price
+                flatten_order = self.broker.place_order(
+                    symbol=sym,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.LIMIT,
+                    price=mark_p,
+                    size=pos.size,
+                    mark_price=mark_p
+                )
+                executed.append({
+                    "order_id": str(flatten_order.order_id),
+                    "symbol": sym,
+                    "side": "SELL",
+                    "price": str(mark_p),
+                    "size": str(pos.size),
+                    "fee": str(mark_p * pos.size * Decimal("0.0010")),
+                    "ts": datetime.now(UTC).isoformat(),
+                    "reason": "FLATTEN_MISSING_PROTECTIVE_STOP"
+                })
+
         for stop_fill in executed:
             try:
                 self.db.record_fill({
