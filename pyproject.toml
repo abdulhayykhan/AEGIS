@@ -40,7 +40,7 @@ target-version = "py312"
 [tool.pytest.ini_options]
 minversion = "8.0"
 addopts = "-ra -q --strict-markers"
-testpaths = ["tests"]
+testpaths = ["tests", "backtest"]
 python_files = ["test_*.py"]
 asyncio_default_fixture_loop_scope = "function"
 
@@ -55,4 +55,5 @@ warn_unused_configs = true
 module = "tests.*"
 disallow_untyped_defs = false
 disallow_untyped_calls = false
+
 
