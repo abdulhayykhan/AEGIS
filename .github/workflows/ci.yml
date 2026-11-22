@@ -31,20 +31,9 @@ jobs:
 
     - name: Run Mypy Type Checks
       run: |
-        mypy src tests
+        mypy src tests backtest
 
-    - name: Run Unit Tests
+    - name: Run Test Suite
       run: |
-        pytest tests/unit
+        pytest -v
 
-    - name: Run Property-Based Invariant Tests
-      run: |
-        pytest tests/property
-
-    - name: Run Contract Tests
-      run: |
-        pytest tests/contract
-
-    - name: Run Planted-Bug Mutation Tests
-      run: |
-        pytest tests/planted_bugs
