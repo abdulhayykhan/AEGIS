@@ -1,0 +1,8 @@
+# CODEOWNERS for AEGIS
+# Critical security and governance boundaries require mandatory owner review.
+
+/src/gate/                    @abdulhayykhan
+/docs/authority-envelope.md   @abdulhayykhan
+/docs/risk-policy.md          @abdulhayykhan
+/docs/role-contract.md        @abdulhayykhan
+/AGENTS.md                    @abdulhayykhan
