@@ -151,9 +151,9 @@ class AgentLoop:
                         if submission.get("stored"):
                             proposals_count += 1
 
-                        # In Phase 5 (RECOMMEND_ONLY), DO NOT place order!
-                        if self.config.mode == "RECOMMEND_ONLY":
-                            # Authority envelope blocks order placement
+                        # In Phase 5 (RECOMMEND_ONLY) and Phase 7 (LIVE_WITH_APPROVAL), DO NOT place order!
+                        if self.config.mode in ("RECOMMEND_ONLY", "LIVE_WITH_APPROVAL"):
+                            # Authority envelope blocks direct order placement without owner approval
                             pass
                         elif self.config.mode in ("PAPER_EXECUTION", "LIVE"):
                             # Gated execution via place_order tool

@@ -180,6 +180,7 @@ class AegisConnectorServer:
         mark_price = mark_prices.get(proposal.symbol, Decimal("30000.00"))
         last_bar_ts = now - timedelta(minutes=15)
 
+        gate_mode = "LIVE" if self.mode in ("LIVE", "LIVE_WITH_APPROVAL") else self.mode
         # Construct deterministic gate context
         context = GateContext(
             account_equity=equity,
@@ -195,7 +196,7 @@ class AegisConnectorServer:
             bar_interval=timedelta(hours=4),
             kill_switch_active=self.kill_switch_active,
             used_idempotency_keys=self.used_idempotency_keys,
-            mode=self.mode
+            mode=gate_mode
         )
 
         # Evaluate against the Risk Gate (DSoR)
@@ -253,6 +254,65 @@ class AegisConnectorServer:
             "remaining_risk_budget": str(remaining_budget),
             "kill_switch_active": self.kill_switch_active,
             "mode": self.mode
+        }
+
+    # --- Phase 7: Live with Approval Tools ---
+    def get_pending_approvals(self) -> list[dict[str, Any]]:
+        """Return all proposals pending owner review/approval."""
+        return [
+            {
+                "proposal_id": str(p.proposal_id),
+                "status": "PENDING_APPROVAL",
+                "symbol": p.proposal.symbol,
+                "side": p.proposal.side.value,
+                "size": str(p.proposal.size),
+                "price": str(p.proposal.price),
+                "created_at": p.created_at.isoformat()
+            }
+            for p in self.proposals.values()
+            if p.idempotency_key not in self.used_idempotency_keys
+        ]
+
+    def approve_and_place_order(self, proposal_id: str | uuid.UUID, approval_token: str) -> dict[str, Any]:
+        """Verify owner approval signature and execute order through Risk Gate."""
+        valid_tokens = {"OWNER_ABDUL_HAYY_SIGNATURE"}
+        if approval_token not in valid_tokens:
+            return {
+                "passed": False,
+                "reasons": ["Invalid or missing owner approval token."]
+            }
+
+        p_id = uuid.UUID(str(proposal_id))
+        stored = self.proposals.get(p_id)
+        if not stored:
+            return {
+                "passed": False,
+                "reasons": [f"Proposal ID '{p_id}' not found."]
+            }
+
+        order_res = self.place_order(
+            proposal_id=p_id,
+            idempotency_key=stored.idempotency_key
+        )
+        if not order_res.get("passed"):
+            return order_res
+
+        order_id = uuid.UUID(order_res["order_id"])
+        broker_order = self.broker.orders[order_id]
+
+        mark_prices = {
+            "BTC/USDT": Decimal("30000.00"),
+            "ETH/USDT": Decimal("2000.00"),
+            "SOL/USDT": Decimal("100.00"),
+        }
+        mark_price = mark_prices.get(broker_order.symbol, Decimal("30000.00"))
+        slippage_pct = (abs(broker_order.price - mark_price) / mark_price * Decimal("100.00")) if mark_price > Decimal(0) else Decimal("0.00")
+
+        return {
+            "passed": True,
+            "order": broker_order.model_dump(),
+            "slippage_pct": slippage_pct,
+            "checks": order_res.get("checks", {})
         }
 
 
