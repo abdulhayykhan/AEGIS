@@ -87,3 +87,18 @@ class AlertService:
             f"Open Positions: {open_positions_count}"
         )
         return self._record(AlertLevel.INFO, text)
+
+    def notify_demotion(
+        self,
+        old_rung: str,
+        new_rung: str,
+        reasons: list[str]
+    ) -> AlertMessage:
+        reason_str = "\n".join(f"- {r}" for r in reasons)
+        text = (
+            f"[CRITICAL] AUTONOMY RUNG DEMOTION TRIGGERED:\n"
+            f"Demoting from {old_rung} to {new_rung}.\n"
+            f"Reasons:\n{reason_str}\n"
+            f"Execution halted. Owner review required before restoring authority."
+        )
+        return self._record(AlertLevel.CRITICAL, text)

@@ -155,7 +155,7 @@ class AgentLoop:
                         if self.config.mode in ("RECOMMEND_ONLY", "LIVE_WITH_APPROVAL"):
                             # Authority envelope blocks direct order placement without owner approval
                             pass
-                        elif self.config.mode in ("PAPER_EXECUTION", "LIVE"):
+                        elif self.config.mode in ("PAPER_EXECUTION", "LIVE", "FULL_AUTONOMY"):
                             # Gated execution via place_order tool
                             order_res = self.connector.place_order(
                                 proposal_id=submission["proposal_id"],

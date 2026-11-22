@@ -180,6 +180,26 @@ class AutonomousScheduler:
             # Overall success requires all 6 conditions
             all_passed = all(checks.values()) and (len(errors) == 0)
 
+            # Autonomy invariant (PRD Section 17 & 18): Any violation drops a rung
+            if (not all_passed or (cycle_result and cycle_result.proposals_generated_count > 0 and cycle_result.orders_placed_count == 0)) and self.agent_config.mode in ("FULL_AUTONOMY", "LIVE"):
+                all_passed = False
+                old_mode = self.agent_config.mode
+                self.agent_config = AgentConfig(
+                    max_turns=self.agent_config.max_turns,
+                    cost_cap_usd=self.agent_config.cost_cap_usd,
+                    timeout_seconds=self.agent_config.timeout_seconds,
+                    mode="RECOMMEND_ONLY"
+                )
+                demotion_reasons = list(errors)
+                if cycle_result and cycle_result.proposals_generated_count > 0 and cycle_result.orders_placed_count == 0:
+                    demotion_reasons.append("Trade proposals rejected by Risk Gate or execution limits.")
+                errors = demotion_reasons
+                self.alert_service.notify_demotion(
+                    old_rung=old_mode,
+                    new_rung="RECOMMEND_ONLY",
+                    reasons=demotion_reasons
+                )
+
             # Heartbeat alert
             acc = self.connector.get_account()
             self.alert_service.notify_heartbeat(
