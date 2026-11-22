@@ -28,10 +28,33 @@ class AlertService:
     Adheres to Book Ch. 17 (Supervision by Exception).
     """
 
-    def __init__(self, telegram_token: str | None = None, chat_id: str | None = None) -> None:
+    def __init__(
+        self,
+        telegram_token: str | None = None,
+        chat_id: str | None = None,
+        heartbeat_url: str | None = None
+    ) -> None:
         self.telegram_token = telegram_token
         self.chat_id = chat_id
+        self.heartbeat_url = heartbeat_url or os.environ.get("AEGIS_HEARTBEAT_WEBHOOK_URL")
         self._history: list[AlertMessage] = []
+
+    def ping_external_heartbeat(self, status: str = "success", message: str = "") -> None:
+        """Ping external dead-man's switch monitoring service (e.g. Healthchecks.io / Cronitor).
+        
+        Guarantees PRD Section 15.3 & Review Finding H7.
+        """
+        if not self.heartbeat_url:
+            return
+        url = self.heartbeat_url.rstrip("/")
+        if status == "fail":
+            url = f"{url}/fail"
+        try:
+            payload = message.encode("utf-8") if message else None
+            req = urllib.request.Request(url, data=payload, headers={"User-Agent": "AEGIS-DeadMansSwitch/1.0"})
+            urllib.request.urlopen(req, timeout=5)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            pass
 
     def get_history(self) -> list[AlertMessage]:
         return list(self._history)

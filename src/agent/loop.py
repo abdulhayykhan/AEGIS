@@ -1,4 +1,3 @@
-import re
 import time
 from decimal import Decimal
 from typing import Any
@@ -6,10 +5,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from src.agent.council import TradeCouncil
+from src.agent.llm_client import BaseLLMClient, MockLLMClient
+from src.agent.news_sanitizer import NewsSanitizer
+from src.agent.playbook_loader import PlaybookLoader
 from src.connector.server import AegisConnectorServer
 from src.signals.indicators import calculate_atr
 from src.signals.models import Bar, SignalType
 from src.signals.onchain import SmartMoneyMetrics
+from src.signals.regime import classify_market_regime
 from src.signals.sizing import calculate_position_size
 from src.signals.strategy import evaluate_strategy
 
@@ -41,10 +44,18 @@ class RunResult(BaseModel):
 class AgentLoop:
     """Bounded, autonomous agent loop executing the trading cycle playbook (Book Ch. 21)."""
 
-    def __init__(self, connector: AegisConnectorServer, config: AgentConfig | None = None) -> None:
+    def __init__(
+        self,
+        connector: AegisConnectorServer,
+        config: AgentConfig | None = None,
+        llm_client: BaseLLMClient | None = None
+    ) -> None:
         self.connector = connector
         self.config = config or AgentConfig()
         self.council = TradeCouncil()
+        self.llm_client = llm_client or MockLLMClient()
+        self.playbook_loader = PlaybookLoader()
+        self.news_sanitizer = NewsSanitizer()
         self.quarantined_news: list[dict[str, Any]] = []
 
     def execute_cycle(
@@ -123,13 +134,11 @@ class AgentLoop:
 
             # Step 4: Untrusted news intake & injection detection (H8 quarantine)
             news_items = self.connector.get_news(symbol=symbol)
-            for item in news_items:
-                content = f"{item.get('title', '')} {item.get('summary', '')}".lower()
-                # Adversarial prompt injection keywords
-                if re.search(r"\b(override|system command|ignore.*instructions|withdraw|transfer)\b", content):
+            sanitized_batch = self.news_sanitizer.sanitize_news_batch(symbol, news_items)
+            for s_item in sanitized_batch:
+                if s_item.quarantined:
                     injection_detected = True
-                    self.quarantined_news.append(item)
-                    # Treat strictly as untrusted data: quarantined from reasoning pipeline
+                    self.quarantined_news.append({"title": s_item.headline, "summary": s_item.summary})
 
             # Step 5: Proposal formulation & Exit Management (C7)
             if signal == SignalType.BUY and not has_pos and atr is not None and atr > Decimal(0):
@@ -143,6 +152,19 @@ class AgentLoop:
                         whale_accumulation_score=Decimal(str(flow.get("whale_accumulation_score", "50"))),
                         dex_liquidity_change_pct=Decimal(str(flow.get("dex_liquidity_change_pct", "0")))
                     )
+                    closes = [b.close for b in bars]
+                    current_regime = classify_market_regime(closes)
+                    active_skills = self.playbook_loader.select_playbooks_for_regime(current_regime)
+
+                    # Model Call with Token Cost Accounting (H1 & Section 5 Step 4)
+                    llm_response = self.llm_client.generate_trade_decision(
+                        symbol=symbol,
+                        system_prompt="AEGIS Deliberative Risk Council",
+                        user_prompt=f"Trend={signal.value}, Regime={current_regime.value}, NewsCount={len(sanitized_batch)}",
+                        available_skills=active_skills
+                    )
+                    accumulated_cost += llm_response.cost_usd
+
                     memo = self.council.deliberate(
                         symbol=symbol,
                         bars=bars,

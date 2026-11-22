@@ -1,3 +1,4 @@
+import time
 import uuid
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -246,11 +247,13 @@ class ExchangeVenueConfig(BaseModel):
     api_endpoint: str
     rate_limit_req_per_sec: int = 10
     timeout_seconds: float = 5.0
+    max_retries: int = 3
+    backoff_factor: float = 0.5
     dry_run: bool = True
 
 
 class PluggableExchangeBroker(BaseBroker):
-    """Production venue adapter routing orders through configured exchange gateways."""
+    """Production venue adapter routing orders through configured exchange gateways with resilience."""
 
     def __init__(self, venue_config: ExchangeVenueConfig, fallback_paper: PaperBroker | None = None) -> None:
         self.config = venue_config
@@ -261,6 +264,31 @@ class PluggableExchangeBroker(BaseBroker):
         self.trade_history = self.fallback_paper.trade_history
         self.realized_pnl = self.fallback_paper.realized_pnl
         self.total_fees_paid = self.fallback_paper.total_fees_paid
+        self._last_request_time = 0.0
+
+    def check_rate_limit(self) -> bool:
+        """Token bucket rate limiter to prevent HTTP 429 exchange throttling."""
+        now = time.monotonic()
+        min_interval = 1.0 / max(1, self.config.rate_limit_req_per_sec)
+        elapsed = now - self._last_request_time
+        if elapsed < min_interval:
+            time.sleep(min_interval - elapsed)
+        self._last_request_time = time.monotonic()
+        return True
+
+    def execute_with_retry(self, func: Any, *args: Any, **kwargs: Any) -> Any:
+        """Execute operation with exponential backoff on transient network failures (Finding M4)."""
+        retries = 0
+        while True:
+            try:
+                self.check_rate_limit()
+                return func(*args, **kwargs)
+            except (ConnectionResetError, TimeoutError, OSError):
+                retries += 1
+                if retries > self.config.max_retries:
+                    raise
+                backoff = self.config.backoff_factor * (2 ** (retries - 1))
+                time.sleep(backoff)
 
     def get_account_summary(self, mark_prices: dict[str, Decimal]) -> dict[str, Any]:
         return self.fallback_paper.get_account_summary(mark_prices)

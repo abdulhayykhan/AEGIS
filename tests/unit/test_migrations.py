@@ -43,3 +43,15 @@ def test_migration_stores_money_as_numeric_never_float():
     # Find any FLOAT or REAL data types
     float_matches = re.findall(r"\b(FLOAT|REAL|DOUBLE\s+PRECISION)\b", content, re.IGNORECASE)
     assert len(float_matches) == 0, f"Found forbidden floating point types in migration: {float_matches}"
+
+
+def test_database_tracks_schema_migrations(tmp_path: Path) -> None:
+    """Verify that Database initializes and records applied migrations in schema_migrations table."""
+    from src.storage.db import Database
+
+    db = Database(db_path=tmp_path / "test_mig.db")
+    migrations = db.get_applied_migrations()
+    assert len(migrations) >= 1
+    assert migrations[0]["version"] == 1
+    assert "Initial AEGIS" in migrations[0]["description"]
+
