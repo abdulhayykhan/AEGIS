@@ -40,6 +40,7 @@ A `BUY` signal is generated if and only if all of the following conditions hold:
 2. **Golden Regime**: $\text{SMA}_{50}(t) > \text{SMA}_{200}(t)$
 3. **No Existing Position**: Currently holding 0 units of instrument $i$.
 4. **Data Freshness**: Current timestamp is within 2 bar durations of bar $t$.
+5. **Regime Gate (Live StrategyConfig default)**: When `regime_filter_enabled=True` (`src/signals/strategy.py`), `BUY` entries are suppressed (`NEUTRAL`) during `HIGH_VOLATILITY` or `TRENDING_BEAR` regimes. (Note: `BacktestEngine` defaults `regime_filter_enabled=False` for raw trend baseline comparability.)
 
 ### 3.2 Long Exit Signal (`SELL` / Close)
 An existing long position is signaled for closure if:

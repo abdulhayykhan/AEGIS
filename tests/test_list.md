@@ -40,11 +40,11 @@ Unit tests verify individual mathematical, schema, and logical functions with de
 - `test_gate_rejects_excessive_position_size`: Reject order where total symbol exposure > 10% equity.
 - `test_gate_rejects_excessive_portfolio_exposure`: Reject order where total portfolio exposure > 50% equity.
 - `test_gate_rejects_excessive_open_positions`: Reject order if existing positions >= 3.
-- `test_gate_rejects_daily_order_limit`: Reject 7th order if 6 orders already logged today.
+- `test_gate_rejects_daily_order_limit`: Reject 11th non-exempt order if 10 orders already logged today.
 - `test_gate_rejects_price_out_of_sanity_band`: Reject order if limit price is > 2% away from mark price.
 - `test_gate_stale_data_rejection`: Reject order if last bar fetched is > 2 bar periods old.
-- `test_gate_daily_loss_halt`: Halt and reject when daily realized/unrealized loss reaches 2.0% equity.
-- `test_gate_peak_drawdown_halt`: Halt and freeze when drawdown from peak equity reaches 8.0%.
+- `test_gate_daily_loss_halt`: Halt and reject new entries when daily realized loss reaches 2.0% equity.
+- `test_gate_peak_drawdown_halt`: Halt and freeze new entries when drawdown from peak equity reaches 10.0%.
 
 ---
 

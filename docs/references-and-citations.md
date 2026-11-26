@@ -113,4 +113,4 @@ While the reasoning engine has been significantly upgraded with specialized agen
 Every integrated component is subjected to strict unit, property, and contract testing:
 - **Zero Hallucination**: No indicator or sizing parameter is ever generated freehand by an LLM prompt; every value is computed by tested functions in `src/signals/`.
 - **DSoR Enforced**: The multi-agent council produces a `TradeMemo` which feeds into `OrderProposal`. The Risk Gate independently evaluates daily loss limits, instrument allowlists, notional order caps, cash buffers, and slippage before execution.
-- **Full Test Coverage**: The integration is verified by 88+ automated tests in `pytest`.
+- **Full Test Coverage**: The integration is verified by 180 automated tests in `pytest`.

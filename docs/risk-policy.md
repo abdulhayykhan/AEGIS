@@ -15,14 +15,14 @@ All monetary calculations use minor currency units (e.g., cents/sats) or exact f
 | **Max Position Per Instrument** | **10.0%** of account equity | Order rejected if `(existing_position_value + new_order_value) > 0.10 * equity` |
 | **Max Total Portfolio Exposure** | **50.0%** of account equity | Order rejected if total notional exposure across all open positions > `0.50 * equity` |
 | **Max Concurrent Open Positions**| **3** instruments | Order rejected if opening a new position would exceed 3 concurrent positions |
-| **Max Orders Per 24h Window** | **6** orders | Order rejected once 6 orders (fills/attempts) are logged within the rolling 24h day |
-| **Max Daily Loss Limit** | **2.0%** of account equity | **Immediate self-halt**: cancel all pending orders, reject all new proposals, alert owner |
-| **Max Drawdown From Peak Equity**| **8.0%** from peak equity | **Emergency self-halt**: trading frozen, requires explicit owner inspection & unlock |
+| **Max Orders Per 24h Window** | **10** orders | Order rejected once 10 non-exempt orders are logged within the UTC day |
+| **Max Daily Loss Limit** | **2.0%** of account equity | **Immediate self-halt**: cancel all pending orders, reject all new risk-adding proposals, alert owner |
+| **Max Drawdown From Peak Equity**| **10.0%** from peak equity | **Emergency self-halt**: new entries frozen, requires explicit owner inspection & unlock |
 | **Allowed Order Types** | `LIMIT`, `STOP_LOSS_LIMIT` | `MARKET` orders are strictly prohibited except when executing an emergency Kill Switch |
 | **Leverage / Margin / Shorting** | **DISABLED** | Any order requesting leverage > 1.0 or borrowing/shorting is unconditionally rejected |
 | **Data Freshness** | ≤ 2 bar periods old | Order rejected if latest market bar timestamp is older than `2 * bar_interval` |
 | **Price Sanity Band** | ±2.0% of last mark price | Order rejected if limit price deviates > 2.0% from the verified last traded price |
-| **Duplicate Guard** | Unique UUID v4 idempotency key | Order rejected if idempotency key has ever been recorded in PostgreSQL `orders` table |
+| **Duplicate Guard** | Unique UUID v4 idempotency key | Order rejected if idempotency key is already recorded in SQLite WAL (`data/aegis.db`) or in-memory executed set |
 | **Execution Mode Flag** | `PAPER` or `LIVE` | Set via environment variable outside model. `LIVE` strictly requires an owner-signed flag file |
 
 ---
@@ -54,22 +54,22 @@ flowchart TD
    - Run pre-trade reconciliation: verify PostgreSQL cached account equity and positions equal broker API state.
 4. **Step 4: Portfolio Limits**:
    - Check open position count (< 3).
-   - Check 24-hour order count (< 6).
-   - Check daily P&L: if current daily loss ≥ 2.0%, trigger daily loss halt.
-   - Check peak equity drawdown: if peak drawdown ≥ 8.0%, trigger drawdown halt.
+   - Check UTC daily order count (< 10 for risk-adding orders; reduce-only exits exempt).
+   - Check daily P&L: if current daily loss ≥ 2.0%, trigger daily loss halt for new entries.
+   - Check peak equity drawdown: if peak drawdown ≥ 10.0%, trigger drawdown halt for new entries.
    - Check total portfolio exposure (notional ≤ 50% equity).
    - Check instrument position size (notional ≤ 10% equity).
 5. **Step 5: Per-Trade Risk & Price Sanity**:
    - Ensure explicit `stop_loss` is provided.
-   - Compute monetary risk: `abs(entry - stop_loss) * size`. Must be ≤ 1% equity.
+   - Compute monetary risk: `abs(entry - stop_loss) * size`. Must be ≤ 1% equity (reduce-only exits exempt).
    - Compute price sanity: `abs(limit_price - last_price) / last_price`. Must be ≤ 0.02.
 6. **Step 6: Idempotency Verification**:
-   - Query `orders` table for `idempotency_key`. Must not exist.
-7. **Step 7: Approval Check (if Phase 7 / live approval required)**:
-   - If envelope requires approval, verify that `approvals` table contains a valid owner signature for the exact SHA-256 hash of the order payload.
+   - Check `proposals` / executed order tracking for `idempotency_key` and `proposal_id`. Must not exist.
+7. **Step 7: Approval Check (if `LIVE_WITH_APPROVAL`)**:
+   - Verify canonical cryptographic signature (HMAC-SHA256 or Ed25519) over order parameters + `expires_at` + single-use `nonce`, and persist in SQLite `approvals` table. Raw owner secrets are rejected.
 8. **Step 8: Persistent Audit Write Before Broker Transmission**:
-   - Persist pass/reject status, detailed check metrics, and timestamp to `gate_decisions`.
-   - Only upon successful database commit may the order be dispatched to the broker API connector.
+   - Persist pass/reject status, detailed check metrics, and timestamp to SQLite `gate_decisions` (schema aligned with `src/migrations/001_initial_schema.sql`).
+   - Only upon successful database commit may the order intent be logged and dispatched to the broker API connector.
 
 ---
 
@@ -77,13 +77,13 @@ flowchart TD
 
 The Kill Switch is an out-of-band safety mechanism designed to protect capital under extreme conditions.
 - **Trigger Mechanisms**:
-  1. CLI command: `aegis-kill --reason "..."`
-  2. Telegram Bot callback button: `[🚨 EMERGENCY KILL SWITCH]`
-  3. Automatic trigger by Risk Gate on unhandled exception or 8% drawdown breach.
+  1. CLI command: `aegis kill --reason "..." --owner "Abdul Hayy Khan"`
+  2. Telegram Bot command: `/kill <reason>`
+  3. Automatic trigger by Risk Gate / Scheduler on unhandled exception or 10.0% drawdown breach.
 - **Immediate Actions Taken**:
-  1. Sets atomic kill switch state in PostgreSQL and shared persistent lock file.
+  1. Sets atomic persistent lock file (`data/aegis_kill_switch.lock`).
   2. Cancels all pending orders across all venues immediately.
-  3. Closes existing positions using market orders (if configured for market liquidation).
+  3. Optionally liquidates open positions via `aegis flatten --token ...`.
   4. Dispatches emergency priority alerts to [Abdul Hayy Khan](https://abdulhayykhan.dev) via Telegram.
   5. Refuses all subsequent requests from the agent loop.
 - **Deactivation**:

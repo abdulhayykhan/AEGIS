@@ -1,7 +1,7 @@
 # AEGIS Go-Live Checklist (Phase 7 Gate)
 
 > Based on *The AI Agent Factory (Panaversity)*, Ch. 18.  
-> Status: **CODE CONTROLS VERIFIED — VENUE PREREQUISITES REQUIRED BEFORE REAL CAPITAL**  
+> Status: **PAPER HARNESS CONTROLS VERIFIED — LIVE ADAPTER & VENUE PREREQUISITES REQUIRED BEFORE REAL CAPITAL**  
 > Target Owner: [Abdul Hayy Khan](https://abdulhayykhan.dev) (`@abdulhayykhan`)
 
 Before transitioning AEGIS from Paper Trading (Phase 6) to Small Live with Approval (Phase 7) or Full Autonomy (Phase 8), each item in this checklist must be rigorously audited and verified with empirical evidence.
@@ -10,7 +10,7 @@ Before transitioning AEGIS from Paper Trading (Phase 6) to Small Live with Appro
 
 ## 1. Governance & Authority Boundaries (Code-Enforced)
 - [x] **Role Contract Signed**: `docs/role-contract.md` signed by owner; digital FTE mandate locked.
-- [x] **Authority Envelope Enforced**: Rung 3 (Draft / Owner Approves Each Order via HMAC token) strictly enforced in code.
+- [x] **Authority Envelope Enforced**: Rung 3 (Draft / Owner Approves Each Order via cryptographic signature with expiry & single-use nonce) strictly enforced in `RiskGate`.
 - [x] **CODEOWNERS Enforced**: CODEOWNERS configuration protecting security perimeter (`src/gate/`, `src/connector/`, `ops/`, specs).
 - [x] **No LLM in Gate**: Risk Gate (DSoR) is 100% deterministic external Python logic.
 
@@ -20,11 +20,11 @@ Before transitioning AEGIS from Paper Trading (Phase 6) to Small Live with Appro
 - [ ] **IP Whitelisting**: Broker API keys restricted to authorized runner IP ranges.
 - [x] **No Keys in Prompts**: Zero broker secrets or private keys exposed to LLM context or repository code.
 
-## 3. Capital & Risk Allocation (Code-Enforced)
-- [x] **Tiny Live Capital**: Initial allocation limited to maximum $500.00 USDT.
-- [x] **Max Position Notional**: Hard cap at 2.0% equity per trade (~$10.00 on $500 capital).
-- [x] **Daily Loss Limit**: Deterministic halt at 2.0% equity loss ($10.00 max daily loss).
-- [x] **Max Drawdown Limit**: Deterministic halt at 10.0% peak drawdown ($50.00 max drawdown).
+## 3. Capital & Risk Allocation (Code-Enforced & Operational)
+- [ ] **Tiny Live Capital**: Initial live venue allocation limited to maximum $500.00 USDT *(operational/venue cap — not enforced in code; `PaperBroker` defaults to $10,000.00)*.
+- [x] **Per-Trade Risk & Max Position**: Hard cap at 1.0% equity risk per trade (`max_risk_pct = 0.01`) and 10.0% max position notional per instrument (`max_position_pct = 0.10`).
+- [x] **Daily Loss & Order Count Limits**: Deterministic halt at 2.0% equity loss (`max_daily_loss_pct = 0.02`) and 10 non-exempt orders per UTC day (`max_orders_per_day = 10`).
+- [x] **Max Drawdown Limit**: Deterministic halt at 10.0% peak drawdown (`max_drawdown_pct = 0.10`).
 
 ## 4. Emergency Kill Switch & Self-Halting (Code-Enforced)
 - [x] **Manual Kill Switch**: Accessible via CLI, file lock (`data/aegis_kill_switch.lock`), and connector.
@@ -51,5 +51,5 @@ Before transitioning AEGIS from Paper Trading (Phase 6) to Small Live with Appro
 | **Authorizing Owner** | [Abdul Hayy Khan](https://abdulhayykhan.dev) |
 | **Active Target Phase** | Phase 7: Small Live with Approval |
 | **Capital Allocation** | $500.00 USDT |
-| **Owner Approval Token** | `OWNER_ABDUL_HAYY_SIGNATURE` |
+| **Owner Approval Mechanism** | Canonical HMAC-SHA256 / Ed25519 Signature (`AEGIS_APPROVAL_SECRET` / `AEGIS_APPROVAL_PUBLIC_KEY`) |
 | **Go-Live Date** | `[OWNER CONFIRMATION PENDING]` |

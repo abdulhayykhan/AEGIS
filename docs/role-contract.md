@@ -30,7 +30,7 @@ Each scheduled cycle, AEGIS must:
 - **Account Tool**: `get_account()`
 - **Order State Tool**: `get_open_orders()`
 - **News Tool (Untrusted)**: `get_news(symbol, since)`
-- **System of Record (SSoR)**: Its own PostgreSQL database records
+- **System of Record (SSoR)**: Its own SQLite WAL database records (`data/aegis.db`, schema aligned with `src/migrations/`)
 - **Knowledge of Record (KSoR)**: Version-controlled strategy specification (`docs/strategy-spec.md`) and risk policy (`docs/risk-policy.md`).
 
 ---
@@ -48,7 +48,7 @@ A run is considered successful if and only if:
 - It terminates in a verified state with all "ran is not worked" conditions satisfied (PRD Section 15.2).
 - Internal database states match broker account balances and positions to the cent.
 - Exactly zero risk limits are breached or approached without an immediate alert.
-- Every order placed has a corresponding gate decision, idempotency key, and rationale recorded in PostgreSQL.
+- Every order placed has a corresponding gate decision, idempotency key, and rationale recorded in the database.
 
 ---
 
@@ -66,8 +66,8 @@ AEGIS is structurally and programmatically forbidden to:
 ### Safe Halting Conditions
 AEGIS must immediately halt execution, disallow further orders, and trigger an urgent alert to [Abdul Hayy Khan](https://abdulhayykhan.dev) whenever:
 - Market data is stale (> 2 bars old) or missing.
-- PostgreSQL state and broker state differ during pre-run or post-run reconciliation.
-- Any risk limit is reached (daily loss limit of 2%, drawdown limit of 8%, order count of 6).
+- Database state and broker state differ during pre-run or post-run reconciliation.
+- Any risk limit is reached (daily loss limit of 2%, drawdown limit of 10%, order count of 10).
 - An untrusted input contains instruction-like text or prompt injection patterns.
 - Any database transaction, schema check, or mathematical verification fails or yields ambiguous results.
 

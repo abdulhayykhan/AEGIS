@@ -53,9 +53,9 @@ Full autonomy in AEGIS does NOT mean unrestricted freedom for the LLM. The syste
 |  2. Schema & Instrument Allowlist (BTC, ETH, SOL only)      |
 |  3. Market Data Freshness (<= 2 bars) & DB Reconciliation    |
 |  4. Portfolio Limits: Daily Loss (2%), Drawdown (10%), etc.  |
-|  5. Per-Trade Risk: Max Notional (2%), Price Sanity (<= 2%)  |
+|  5. Per-Trade Risk (1%), Max Position (10%), Price Sanity (2%)|
 |  6. Stop Loss & Take Profit Mandatory Structure             |
-|  7. Idempotency Key De-duplication                          |
+|  7. Idempotency Key & Single-Use Approval Nonce Guard        |
 |  8. Order Count Frequency Throttling (<= 10 orders/day)     |
 +------------------------------+------------------------------+
                                |
@@ -68,7 +68,7 @@ Full autonomy in AEGIS does NOT mean unrestricted freedom for the LLM. The syste
 ```
 
 ### Pillar 1: Deterministic Risk Gate (DSoR)
-- Enforces hard stop loss, max 2.0% equity position size, max 2.0% daily loss budget, and 10.0% drawdown limit.
+- Enforces hard stop loss, max 1.0% per-trade risk, max 10.0% equity position notional per instrument, max 50.0% total portfolio exposure, max 2.0% daily loss budget, and 10.0% peak drawdown limit.
 - Rejects Wild Bids via 2.0% price sanity deviation check.
 - Prevents order replay via UUID idempotency tracking.
 
@@ -86,15 +86,16 @@ Full autonomy in AEGIS does NOT mean unrestricted freedom for the LLM. The syste
 ## 4. Test Suite Verification Summary
 
 Across the entire AEGIS codebase:
-- **Total Automated Tests**: **74 tests passing**
+- **Total Automated Tests**: **180 tests passing**
 - **Test Categories**:
-  - Unit Tests: Indicators, Sizing, Freshness, Migrations, Gate, Kill Switch, Reconciliation, Recomputation, Agent Loop, Alerts, Scheduler, Dashboard, Live Approval, Full Autonomy.
+  - Unit Tests: Indicators, Sizing, Freshness, Migrations, Gate, Kill Switch, Reconciliation, Recomputation, Agent Loop, Alerts, Scheduler, Dashboard, Live Approval, Full Autonomy, Promotion Checker, Telegram Bot, Status Server, Review 2 & 3 Proofs.
   - Property Tests: 100 Hypothesis fuzzing runs verifying portfolio invariants.
   - Contract Tests: MCP Connector tool schemas and forbidden tool auditing.
   - Planted-Bug Tests: Mutation testing proving gate catches deliberate bugs.
+  - Chaos & Resilience Tests: Simulated network timeouts, retries, and fault injection.
   - Red-Team Tests: Adversarial prompt injection attacks in news feeds.
   - Replay Tests: Bit-for-bit deterministic replay of historical bars.
-- **Type Safety**: Strict `mypy` passing across 56 source files with 0 errors.
+- **Type Safety**: Strict `mypy` passing across 98 source and test files with 0 errors.
 - **Code Quality**: `ruff` passing with 0 linting or formatting issues.
 
 ---

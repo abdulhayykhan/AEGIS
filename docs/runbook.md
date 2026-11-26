@@ -18,34 +18,38 @@ flowchart TD
 
 ### Step 1: Stop First (Engage the Kill Switch)
 Do not try to reason with or debug a running trading process. Freeze execution first.
-- **Option A (Telegram Bot)**: Click the `[🚨 EMERGENCY KILL SWITCH]` button.
+- **Option A (Telegram Bot)**: Send `/kill <reason>` or `/pause` from the authorized owner chat & user ID.
 - **Option B (CLI)**:
   ```bash
-  python -m src.gate.kill_switch --engage --reason "Operator manual intervention"
+  aegis kill --reason "Operator manual intervention" --owner "Abdul Hayy Khan"
+  ```
+- **Emergency Position Liquidation (Optional)**:
+  ```bash
+  aegis flatten --owner "Abdul Hayy Khan" --token "$AEGIS_FLATTEN_SECRET"
   ```
 - **What this does**:
-  1. Activates the persistent atomic kill flag.
-  2. Dispatches cancellation calls for all open orders across all venues.
-  3. Optionally executes market closing orders if position liquidation is flagged.
+  1. Activates the persistent atomic kill flag (`data/aegis_kill_switch.lock`).
+  2. Cancels all open orders across the broker.
+  3. If `aegis flatten` is invoked, submits reduce-only sell orders and records orders, fills, and snapshots atomically.
   4. Blocks any subsequent orders from the agent loop.
 
 ### Step 2: Read the Record
-Examine the immutable system state recorded in PostgreSQL:
+Examine the immutable system state recorded in SQLite WAL (`data/aegis.db`):
 1. Check the last run:
    ```sql
-   SELECT * FROM runs ORDER BY started_at DESC LIMIT 1;
+   SELECT run_id, mode, status, started_at, details_json FROM runs ORDER BY started_at DESC LIMIT 1;
    ```
 2. Check recent gate decisions:
    ```sql
-   SELECT * FROM gate_decisions ORDER BY decided_at DESC LIMIT 5;
+   SELECT decision_id, proposal_id, passed, reasons_json, decided_at FROM gate_decisions ORDER BY decided_at DESC LIMIT 5;
    ```
-3. Check recent incidents:
+3. Check active or past demotions:
    ```sql
-   SELECT * FROM incidents ORDER BY ts DESC LIMIT 5;
+   SELECT incident_id, current_rung, reason, occurred_at, resolved FROM demotions ORDER BY occurred_at DESC LIMIT 5;
    ```
 4. Check reconciliation diffs:
    ```sql
-   SELECT * FROM reconciliations WHERE match = false ORDER BY ts DESC;
+   SELECT reconciliation_id, ts, matched, diffs_json FROM reconciliations WHERE matched = 0 ORDER BY ts DESC;
    ```
 
 ### Step 3: Diagnose the Five Causes (Cheapest First)
@@ -68,19 +72,23 @@ When debugging unexpected agent behavior, investigate in order of increasing cos
 
 To safely resume operations after an incident or halt:
 1. Verify the root cause is resolved and verified by a passing test.
-2. Verify broker positions and PostgreSQL database are 100% synchronized:
+2. Verify broker positions and database ledger are 100% synchronized:
    ```bash
-   python -m src.gate.reconcile --verify
+   aegis reconcile
    ```
 3. Clear the kill switch state via owner credentials:
    ```bash
-   python -m src.gate.kill_switch --disengage --owner "Abdul Hayy Khan"
+   aegis kill --disengage --owner "Abdul Hayy Khan" --token "$AEGIS_OWNER_SECRET"
    ```
-4. Run a single manual check in Recommend-Only mode:
+4. If an autonomy demotion incident is active, resolve it explicitly:
    ```bash
-   python -m src.agent.run --mode recommend_only
+   aegis restore --incident INC-XXXX --owner "Abdul Hayy Khan" --token "$AEGIS_RESTORE_SECRET"
    ```
-5. Confirm green health check before re-enabling automated scheduler.
+5. Run a single manual check in Recommend-Only mode:
+   ```bash
+   aegis run --mode RECOMMEND_ONLY
+   ```
+6. Confirm green health check (`aegis dashboard`) before re-enabling automated scheduler.
 
 ---
 
